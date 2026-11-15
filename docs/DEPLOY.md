@@ -289,7 +289,8 @@ Good to know:
   you while the two ports stay open and the name points at the server.
 * The registration of the name ends after a year unless it renews itself.
 * A trial without a name: `sudo make domain ARGS=fxlab.localhost` serves the dashboard
-  to the server itself only, with a certificate Caddy signs. CI does this on every push.
+  under a name that only the server itself can look up, with a certificate Caddy signs.
+  CI does this on every push.
 
 Tested: the real Caddy in front of the real application on such a trial name, by hand
 with a browser and in CI (the redirect, the certificate, the login and its cookie, the

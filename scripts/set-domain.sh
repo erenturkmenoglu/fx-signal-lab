@@ -142,7 +142,7 @@ addresses_of() {
 check_dns() {
   local mine seen
   if [ "$trial" -eq 1 ]; then
-    note "$name is a trial name: it only works on this machine, and Caddy signs the certificate itself"
+    note "$name is a trial name: only this machine can look it up, and Caddy signs the certificate itself"
     return 0
   fi
   if [ "$dns_check" -eq 0 ]; then
