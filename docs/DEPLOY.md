@@ -7,7 +7,9 @@ The author's build environment has no Docker and no cloud account, so the steps 
 written without running them; the setup script was tested against stand-ins for Docker
 and the application (key handling, swap file, re-runs, failure paths). Steps 1 to 4
 have since been run on a Lightsail server (15 November 2026), and step 4 printed what
-is described there. Report what differs for you.
+is described there. The domain of step 5.4 was tried with the real Caddy in front of the
+real application, but only on a trial name; what that leaves untested is said there.
+Report what differs for you.
 
 ## What to run it on
 
@@ -46,6 +48,7 @@ may compress better or worse.
 | Database, while it compresses a day of ticks | 180 to 280 MB more, for a few seconds |
 | Application, while it recovers a gap | about 40 MB more per page of 50,000 quotes |
 | Docker itself | 170 to 185 MB |
+| Caddy, only with a domain of your own (5.4) | 45 MB after its start, 51 MB after 80 requests and a live stream, on the development machine. CI limits it to 100 MB |
 | Image build next to the running stack | about 375 MB at its peak (up to about 670 MB for the very first build, which also downloads the images) |
 | A backtest (a year of one-minute bars) | about 165 MB for 2 to 3 seconds, in a process of its own |
 | A signal board (81 methods on the same year) | about 210 MB for 8 seconds on the development machine, in a process of its own; a month: 115 MB for 2 seconds. Not yet timed on the server |
@@ -107,7 +110,8 @@ Settings, Billing, Upgrade); unused credit still counts.
 5. Give it a name and create it. When it is running, open **Connect using SSH**: a
    terminal in the browser, no key files needed.
 
-Under **Networking** you can delete the HTTP (port 80) rule. Only SSH needs to stay.
+Under **Networking** you can delete the HTTP (port 80) rule. Only SSH needs to stay,
+unless the dashboard gets a domain of its own (5.4), which needs ports 80 and 443.
 
 ## 2. Get the code
 
@@ -225,12 +229,76 @@ devices that run the Tailscale app and are signed in to your account. That is th
 private choice if every device you use can run the app. One port is either private or
 public: the last of the two commands wins.
 
-### 5.4 A work computer
+### 5.4 A domain of your own
+
+An address like `https://signale.example` instead of the Tailscale one. Funnel cannot
+give it: it serves names under `ts.net` only. With a domain the server answers on the
+internet itself. Caddy, a small web server, sits in front of the application, gets the
+HTTPS certificate from Let's Encrypt, renews it and sends plain `http` on to `https`.
+The password of 5.1 stays the only way in, and the command below refuses to run
+without one.
+
+1. **A name.** Any registrar will do, and the name does not matter to the software.
+   Inside Lightsail: **Domains & DNS**, then **Register domain**; Lightsail creates the
+   DNS zone for it by itself. A `.com` costs about $15 a year there (Route 53's price
+   list, July 2026); other endings cost less or more. Leave the privacy protection for
+   your contact details on.
+2. **An address that stays.** A Lightsail server gets a new public address when it is
+   stopped and started, unless a static IP is attached: instance page, **Networking**,
+   **Create static IP** (older consoles: **Attach static IP**). It costs nothing while
+   it is attached.
+3. **Two open ports.** Same page, **IPv4 firewall**, **Add rule**: HTTPS (TCP 443), and
+   HTTP (TCP 80) again if you deleted it in step 1. Port 80 answers with a redirect to
+   HTTPS and lets Let's Encrypt check that the name is yours.
+4. **The name points at the server.** With the name in Lightsail: instance page,
+   **Domains**, **Assign domain**. At another registrar: an `A` record from the name to
+   the static address. A subdomain such as `fx.signale.example` works the same way.
+5. **Turn it on.**
+
+   ```bash
+   cd ~/fx-signal-lab && git pull
+   sudo make domain ARGS="--check signale.example"    # optional: the checks alone
+   sudo make domain ARGS=signale.example
+   ```
+
+   It checks that a password is set and that the name points at this server, and
+   changes nothing if not. Then it restarts the application (a few seconds of the feed,
+   recovered like after any restart), starts Caddy and waits until `https://` answers
+   with a valid certificate, usually within a minute. If that has not happened after
+   four minutes it prints what Caddy reported and puts everything back as it was. Run it
+   again when the reason is fixed.
+6. **One door.** Funnel keeps publishing the old address until it is told to stop:
+   `sudo tailscale funnel reset`. Do that once the new address works.
+
+Good to know:
+
+* The name is public from the moment the certificate exists (a Funnel address is too).
+  Let's Encrypt publishes every certificate it issues, and programs that scan the
+  internet read that list. They reach the login page and the health check, nothing
+  else; the password is what stands between them and the dashboard
+  ([RISKS.md](RISKS.md), R6).
+* `sudo make domain` shows what is set. `sudo make domain ARGS=--remove` stops Caddy,
+  which closes the two ports on the server. For another name, run the command with it.
+* While a domain is set, `make password ARGS=--remove` refuses. An application that
+  finds a domain in `.env` and no password serves nothing and says why.
+* The certificate lives in the Docker volume `caddy_data`. Renewal needs nothing from
+  you while the two ports stay open and the name points at the server.
+* The registration of the name ends after a year unless it renews itself.
+* A trial without a name: `sudo make domain ARGS=fxlab.localhost` serves the dashboard
+  to the server itself only, with a certificate Caddy signs. CI does this on every push.
+
+Tested: the real Caddy in front of the real application on such a trial name, by hand
+with a browser and in CI (the redirect, the certificate, the login and its cookie, the
+live stream, compression, the refusals, turning it off). Not tested: a certificate from
+Let's Encrypt for a real name, the Lightsail console steps (they are from its
+documentation), and Funnel and Caddy running side by side.
+
+### 5.5 A work computer
 
 Company networks often block addresses they do not know, and a `ts.net` address may be
-one of them. If it does not open there, the next step is a domain of your own (about
-$11 a year for a .com) pointing at the server, with a reverse proxy for HTTPS; that is
-not set up in this repository yet. Check your employer's rules for personal trading
+one of them. A domain of your own (5.4) is the next thing to try. A name registered
+days ago can be blocked as well: several corporate web filters have a category for
+domains younger than about a month. Check your employer's rules for personal trading
 tools and for what a work device may be used for.
 
 ## 6. First look
@@ -249,7 +317,11 @@ What each message means and what to do about it is in [RUNBOOK.md](RUNBOOK.md).
 git pull && docker compose up -d --build    # update to the latest version
 docker compose logs -f app                  # follow the log
 make backup                                 # database dump into backups/
+sudo make domain                            # the domain that is set, if any (5.4)
 ```
+
+With a domain, Caddy is part of the stack and is updated by the first command. Only a
+changed `Caddyfile` needs one more: `docker compose restart caddy`.
 
 A restart or a reboot is safe. The downtime is recorded and recovered from Massive's
 history, up to 72 hours automatically.
@@ -264,7 +336,8 @@ For backups, also turn on automatic snapshots of the instance in the Lightsail c
 | Massive Currencies Starter | $49 |
 | Server (Lightsail, 2 GB) | $12 |
 | Tailscale, personal plan | free |
-| **Total** | **about $61** |
+| A domain of your own (optional, 5.4) | about $1.25 ($15 a year for a .com) |
+| **Total** | **about $61, $62 with a domain** |
 
 ## A home PC instead
 
@@ -284,3 +357,9 @@ automatically.
 * [Tailscale: host a private web server with Docker](https://tailscale.com/docs/solutions/host-private-server-docker)
 * [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) and the [`tailscale funnel` command](https://tailscale.com/docs/reference/tailscale-cli/funnel)
 * [Tailscale pricing](https://tailscale.com/pricing/)
+* [Caddy: automatic HTTPS](https://caddyserver.com/docs/automatic-https) and the [Caddy image](https://hub.docker.com/_/caddy)
+* [Lightsail: IP addresses and static IPs](https://docs.aws.amazon.com/lightsail/latest/userguide/understanding-public-ip-and-private-ip-addresses-in-amazon-lightsail.html) and the [firewall rules reference](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-firewall-rules-reference.html)
+* [Lightsail: register a domain](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-register-new-domain.html) and [route a domain to an instance](https://docs.aws.amazon.com/en_us/lightsail/latest/userguide/amazon-lightsail-routing-to-instance.html)
+* [Route 53's domain prices, as tracked by tldes.com](https://tldes.com/registrars/amazon)
+* [Let's Encrypt: certificate transparency logs](https://letsencrypt.org/docs/ct-logs/)
+* [Palo Alto Networks: the newly-registered-domain category](https://docs.paloaltonetworks.com/pan-os/10-0/pan-os-admin/url-filtering/url-categories/url-risk-categories)

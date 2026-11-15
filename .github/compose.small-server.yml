@@ -15,3 +15,6 @@ services:
   app:
     mem_limit: 350m
     memswap_limit: 350m
+  caddy:
+    mem_limit: 100m
+    memswap_limit: 100m

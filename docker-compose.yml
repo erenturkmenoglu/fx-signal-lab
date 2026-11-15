@@ -6,6 +6,10 @@
 #
 # Both services restart automatically (crash, reboot).  Data lives in the named volume
 # `pgdata` and survives `docker compose down`; only `down -v` deletes it.
+#
+# A third service, `caddy`, serves the dashboard on a domain of your own with HTTPS.  It
+# belongs to the profile "domain" and is not started unless `make domain` has turned that
+# profile on in .env (docs/DEPLOY.md, "A domain of your own").
 
 name: fx-signal-lab
 
@@ -51,8 +55,8 @@ services:
     volumes:
       - ./config:/app/config:ro
     ports:
-      # Bound to localhost on purpose: the dashboard has no authentication yet.
-      # For access from a phone or another machine see docs/DEPLOY.md (Tailscale).
+      # Bound to localhost on purpose: whatever reaches the dashboard from outside (Tailscale,
+      # or Caddy below for a domain of your own) comes through this machine, not past it.
       - "127.0.0.1:8000:8000"
     healthcheck:
       test:
@@ -66,5 +70,43 @@ services:
       start_period: 40s
     stop_grace_period: 45s
 
+  caddy:
+    # Only with a domain of your own.  Caddy gets the certificate, renews it, sends http on
+    # to https and passes everything else to the application (Caddyfile).
+    profiles: ["domain"]
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-}
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$$DASHBOARD_DOMAIN" ]; then
+          echo "DASHBOARD_DOMAIN is not set: turn the domain on with 'make domain ARGS=your.name'" >&2
+          exit 78
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    # it faces the internet: no more rights inside its container than binding the two ports
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # the only ports of this stack that are open to the world
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # certificates and the account they were issued to: keep, or every restart asks for new ones
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

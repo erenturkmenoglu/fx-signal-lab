@@ -196,6 +196,41 @@ async def test_a_broken_hash_closes_everything_and_says_so(engine: AsyncEngine, 
         assert refused.status_code == 401 and "unusable" in refused.json()["detail"]
 
 
+async def test_a_public_address_without_a_password_is_closed_to_everybody(
+    engine: AsyncEngine, migrated_database: str
+) -> None:
+    """A domain in the settings and no password: nothing is served but health and the reason."""
+    settings = mock_settings(migrated_database, dashboard_domain=" Signale.Example ")
+    assert settings.dashboard_domain == "signale.example"
+    async with AppServer(settings) as app, httpx.AsyncClient(base_url=app.url) as http:
+        assert (await http.get("/api/health/live")).status_code == 200
+        ready = await http.get("/api/health/ready")
+        assert ready.status_code == 503 and "(DASHBOARD_DOMAIN) but no password" in ready.json()["problems"][0]
+        assert (await http.get("/api/auth/session")).json() == {"required": True, "authenticated": False}
+        for path in CLOSED:
+            assert (await http.get(path)).status_code == 401, path
+        assert (await http.put("/api/setups", json={"name": "x", "methods": ["rsi_reversion@5m"]})).status_code == 401
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert (await http.get(path)).status_code == 404, path
+        for guess in ("", "anything", PASSWORD):
+            refused = await http.post("/api/auth/login", json={"password": guess})
+            assert refused.status_code == 401 and "make password" in refused.json()["detail"], guess
+            assert "set-cookie" not in refused.headers
+        with pytest.raises(InvalidStatus) as closed:
+            async with connect(f"ws://127.0.0.1:{app.port}/ws/live", proxy=None):
+                pass
+        assert closed.value.response.status_code == 403
+    # with a password the same address is an ordinary protected one
+    async with (
+        AppServer(protected(migrated_database, dashboard_domain="signale.example")) as app,
+        httpx.AsyncClient(base_url=app.url) as http,
+    ):
+        assert (await http.get("/api/health/ready")).json() == {"ready": True, "problems": []}
+        assert (await http.get("/api/status")).status_code == 401
+        assert (await http.post("/api/auth/login", json={"password": PASSWORD})).status_code == 200
+        assert (await http.get("/api/status")).status_code == 200
+
+
 async def test_the_command_line_works_against_a_protected_application(
     engine: AsyncEngine, migrated_database: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

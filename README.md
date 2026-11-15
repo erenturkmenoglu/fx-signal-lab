@@ -50,9 +50,10 @@ Open <http://127.0.0.1:8000>. API documentation is at <http://127.0.0.1:8000/doc
 
 On a fresh server, `./scripts/server-setup.sh` does the same and installs Docker first;
 [docs/DEPLOY.md](docs/DEPLOY.md) walks through the server and access from a phone or any
-browser. The dashboard has no login until `make password` has set one (the API pages
+browser, by a Tailscale address or on a domain of your own (`make domain`, with Caddy
+for HTTPS). The dashboard has no login until `make password` has set one (the API pages
 under `/docs` are then switched off); without a login it belongs on this machine or a
-private network only.
+private network only, and a domain cannot be set.
 
 Then verify what your key can do. The probe needs the account's single WebSocket
 connection, so the app is stopped for a moment:

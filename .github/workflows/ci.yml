@@ -68,11 +68,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
-      - run: shellcheck scripts/server-setup.sh scripts/set-password.sh .github/wait-ready.sh .github/report-stack.sh .github/mem-peak.sh
-      - name: Both Compose configurations are valid (the server's, and the one with CI limits)
+      - run: shellcheck scripts/server-setup.sh scripts/set-password.sh scripts/set-domain.sh .github/wait-ready.sh .github/report-stack.sh .github/mem-peak.sh
+      - name: Both Compose configurations are valid (the server's, and the one with CI limits), with and without a domain
         run: |
           docker compose -f docker-compose.yml config --quiet
           docker compose config --quiet
+          docker compose -f docker-compose.yml --profile domain config --quiet
+          docker compose --profile domain config --quiet
+          # Caddy belongs to the stack only when the profile is on
+          test "$(docker compose config --services | sort | tr '\n' ' ')" = "app db "
+          test "$(docker compose --profile domain config --services | sort | tr '\n' ' ')" = "app caddy db "
       - name: Build and start without an API key
         run: ./.github/mem-peak.sh "first pull, build and start" docker compose up -d --build
       - name: Wait for the application
@@ -375,6 +380,87 @@ jobs:
           test "$(curl -fsS http://127.0.0.1:8000/api/setups)" = "[]"
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
+      - name: A domain of its own needs a password, is served over HTTPS by Caddy and can be turned off again
+        run: |
+          changed() { grep -q -e '^DASHBOARD_DOMAIN=' -e '^COMPOSE_PROFILES=' .env; }
+          # without a password nothing is changed
+          if ./scripts/set-domain.sh fxlab.localhost > domain.txt 2>&1; then echo "a domain was set without a password"; exit 1; fi
+          grep -q 'no dashboard password is set' domain.txt
+          if changed; then echo ".env was changed"; exit 1; fi
+          DASHBOARD_PASSWORD='ci only passphrase 2026' ./scripts/set-password.sh
+          # a name without an address and a name that points at another server are refused
+          if ./scripts/set-domain.sh nonexistent.invalid > domain.txt 2>&1; then echo "a name without an address was accepted"; exit 1; fi
+          grep -q 'nonexistent.invalid has no address yet' domain.txt
+          echo '203.0.113.7 dns-ok.fxlab.test' | sudo tee -a /etc/hosts > /dev/null
+          if FXLAB_PUBLIC_IP=203.0.113.8 ./scripts/set-domain.sh dns-ok.fxlab.test > domain.txt 2>&1; then echo "a name that points elsewhere was accepted"; exit 1; fi
+          grep -q "dns-ok.fxlab.test points at 203.0.113.7, but this server's public address is 203.0.113.8" domain.txt
+          FXLAB_PUBLIC_IP=203.0.113.7 ./scripts/set-domain.sh --check dns-ok.fxlab.test > domain.txt
+          grep -q "dns-ok.fxlab.test points at 203.0.113.7, this server's public address" domain.txt
+          # the same check with the address of this runner looked up, as on a server
+          ./scripts/set-domain.sh --check dns-ok.fxlab.test > domain.txt 2>&1 || true
+          cat domain.txt
+          grep -Eq "but this server's public address is [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.|could not be looked up" domain.txt
+          if changed || docker compose --profile domain ps -a --services | grep -qx caddy; then echo "a refused name left something behind"; exit 1; fi
+
+          # a trial name: Caddy signs the certificate itself, everything else is as with a real name
+          ./scripts/set-domain.sh fxlab.localhost
+          grep -q '^DASHBOARD_DOMAIN=fxlab.localhost$' .env && grep -q '^COMPOSE_PROFILES=domain$' .env
+          docker compose ps
+          docker compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt > caddy-root.crt
+          via() { curl -sS --noproxy '*' --cacert caddy-root.crt --resolve fxlab.localhost:443:127.0.0.1 --resolve fxlab.localhost:80:127.0.0.1 "$@"; }
+          test "$(via -o /dev/null -w '%{http_code} %{redirect_url}' 'http://fxlab.localhost/lab?day=1')" = "308 https://fxlab.localhost/lab?day=1"
+          test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/api/health/ready)" = "200"
+          via -f -o /dev/null https://fxlab.localhost/
+          test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/api/status)" = "401"
+          test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/docs)" = "404"
+          # the application's own headers arrive, and the answer does not name the programs behind it
+          via -D - -o /dev/null https://fxlab.localhost/ | tr -d '\r' > headers.txt
+          grep -qi '^strict-transport-security: max-age=31536000' headers.txt
+          grep -qi '^x-frame-options: DENY' headers.txt
+          grep -qi "^content-security-policy: default-src 'self'" headers.txt
+          if grep -qi -e '^server:' -e '^via:' headers.txt; then echo "the answer names its server"; exit 1; fi
+          # a name that is not the dashboard's gets no answer from the same address
+          if curl -s --noproxy '*' -k --max-time 5 --resolve other.localhost:443:127.0.0.1 -o /dev/null https://other.localhost/; then
+            echo "another name was served"; exit 1
+          fi
+          # log in as a browser does: over HTTPS the client keeps the cookie itself
+          test "$(via -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"password":"not the passphrase"}' https://fxlab.localhost/api/auth/login)" = "401"
+          via -f -c jar.txt -o /dev/null -H 'Content-Type: application/json' \
+            -d '{"password":"ci only passphrase 2026"}' https://fxlab.localhost/api/auth/login
+          via -f -b jar.txt https://fxlab.localhost/api/status | python3 -c "
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s['provider']['label'] == 'MOCK' and s['connection']['state'] == 'streaming', (s['provider'], s['connection'])
+          print('ok: logged in over HTTPS, data label', s['provider']['label'])"
+          # a day of bars travels compressed
+          day='https://fxlab.localhost/api/bars?symbol=EURUSD&timeframe=1m&source=provider&start=2026-10-06T00:00:00Z&end=2026-10-07T00:00:00Z&limit=20000'
+          plain="$(via -f -b jar.txt -o /dev/null -w '%{size_download}' "$day")"
+          packed="$(via -f -b jar.txt -o /dev/null -w '%{size_download}' -H 'Accept-Encoding: gzip' "$day")"
+          echo "a day of one-minute bars: $plain bytes, $packed compressed"
+          test "$plain" -gt 50000 && test "$packed" -lt $((plain / 3))
+          # the live stream is a WebSocket: it has to pass the proxy, and only with a session
+          token="$(awk '$6 == "fxlab_session" {print $7}' jar.txt)"
+          docker compose exec -T -e ROOT_PEM="$(cat caddy-root.crt)" app python - fxlab.localhost caddy "$token" < .github/live-through-proxy.py
+          # the application knows it is public, and the login cannot be taken away while it is
+          test "$(docker compose exec -T app python -c 'from fxlab.config import get_settings; print(get_settings().dashboard_domain)')" = "fxlab.localhost"
+          if ./scripts/set-password.sh --remove > domain.txt 2>&1; then echo "the login was removed from a public address"; exit 1; fi
+          grep -q 'Turn the domain off first' domain.txt
+          test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/api/status)" = "401"
+          # running it again changes nothing; Caddy stays inside its memory limit and was not restarted
+          ./scripts/set-domain.sh fxlab.localhost
+          ./.github/report-stack.sh check
+
+          # off again: no container, no open port, no setting; the application is still closed
+          ./scripts/set-domain.sh --remove
+          if changed; then echo "the settings are still in .env"; exit 1; fi
+          test -z "$(docker compose --profile domain ps -a -q caddy)"
+          if curl -s --noproxy '*' -k --max-time 5 --resolve fxlab.localhost:443:127.0.0.1 -o /dev/null https://fxlab.localhost/; then
+            echo "port 443 still answers"; exit 1
+          fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/status)" = "401"
+          ./scripts/set-password.sh --remove
+          curl -fsS -o /dev/null http://127.0.0.1:8000/api/status
       - name: Logs on failure
         if: failure()
         run: |

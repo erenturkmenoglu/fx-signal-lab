@@ -11,7 +11,8 @@ strategy research. The phases below remain the full scope. The order of work is 
 thin slice through Phases 2 to 4, and the rest afterwards.
 
 1. **Access** (done): a password login and an address that opens in any browser
-   ([DEPLOY.md](DEPLOY.md), step 5).
+   ([DEPLOY.md](DEPLOY.md), step 5). Since 15 November 2026 optionally a domain of its
+   own, with Caddy for HTTPS (step 5.4; tried on a trial name, not yet with a real one).
 2. **Backtest engine** (done, not yet run on real history; [BACKTEST.md](BACKTEST.md)):
    the first strategies of the specification (RSI reversion, Bollinger reversion, EMA
    momentum, session breakout), each with entries, exits, stop-loss and take-profit.

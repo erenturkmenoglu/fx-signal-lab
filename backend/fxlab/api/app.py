@@ -45,7 +45,11 @@ CONTENT_SECURITY_POLICY = (
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    auth = Auth(settings.password_hash, cookie_secure=settings.session_cookie_secure)
+    auth = Auth(
+        settings.password_hash,
+        cookie_secure=settings.session_cookie_secure,
+        public=bool(settings.dashboard_domain),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

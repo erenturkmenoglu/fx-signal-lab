@@ -133,15 +133,26 @@ class LoginThrottle:
 
 
 class Auth:
-    """Everything the application needs to know about logins.  ``enabled`` is False without a hash."""
+    """Everything the application needs to know about logins.
 
-    def __init__(self, stored_hash: str | None, *, cookie_secure: bool = True) -> None:
+    ``enabled`` is False without a hash, with one exception: an installation that is served on
+    a public name (``public``) and has no password stays closed to everybody.
+    """
+
+    def __init__(self, stored_hash: str | None, *, cookie_secure: bool = True, public: bool = False) -> None:
         self.enabled = bool(stored_hash)
         self.cookie_secure = cookie_secure
         self.problem: str | None = None
         self._password: StoredPassword | None = None
         self._signer: SessionSigner | None = None
         self.throttle = LoginThrottle()
+        if public and not stored_hash:
+            # fail closed: a public address without a password would be an open door
+            self.enabled = True
+            self.problem = (
+                "this dashboard has a public address (DASHBOARD_DOMAIN) but no password; "
+                "it stays closed until one is set with `make password`"
+            )
         if stored_hash:
             try:
                 self._password = StoredPassword.parse(stored_hash)

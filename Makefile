@@ -1,5 +1,5 @@
 # Convenience targets.  `make help` lists them.
-.PHONY: help up down logs ps verify reconcile password history strategies backtest \
+.PHONY: help up down logs ps verify reconcile password domain history strategies backtest \
 	test test-backend test-frontend lint backup restore shell-db
 
 # database that backup and restore work on (the simulator's is fxlab_mock)
@@ -30,6 +30,9 @@ reconcile: ## compare live ticks with Massive's quote history; read-only, e.g. A
 
 password: ## set or change the dashboard password (asked twice, hidden); ARGS=--remove turns the login off
 	./scripts/set-password.sh $(ARGS)
+
+domain: ## serve the dashboard on a domain of your own over HTTPS, e.g. ARGS=signale.example (ARGS=--remove: off)
+	./scripts/set-domain.sh $(ARGS)
 
 history: ## download provider bars, e.g. ARGS="--symbol EURUSD --timeframe 1m --start 2025-11-01 --end 2026-11-14"
 	docker compose exec -T app python -m fxlab.cli history $(ARGS)

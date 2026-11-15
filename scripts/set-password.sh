@@ -61,6 +61,10 @@ restart() {
 }
 
 if [ "${1:-}" = "--remove" ]; then
+  domain="$(sed -n 's/^DASHBOARD_DOMAIN=//p' .env | tail -n 1)"
+  if [ -n "$domain" ]; then
+    fail "the dashboard is served on a public name ($domain), and a public address must not be without a password. Turn the domain off first: make domain ARGS=--remove"
+  fi
   write_env ""
   restart
   note "the login is off. The dashboard is open to everyone who can reach it:"

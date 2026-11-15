@@ -229,6 +229,23 @@ browser is in [DEPLOY.md](DEPLOY.md), step 5.
   on a public address.
 * Never publish port 8000 on a public interface without a password.
 
+A domain of its own ([DEPLOY.md](DEPLOY.md), 5.4) puts Caddy in front of the
+application. Caddy then holds ports 80 and 443 of the server; the application stays on
+`127.0.0.1`. `make domain ARGS=<name>` turns it on, `make domain` shows what is set,
+`make domain ARGS=--remove` turns it off.
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `make domain`: "has no address yet" | No DNS `A` record for the name is visible. | Create it; a new record can take minutes to be seen. |
+| `make domain`: "points at ..., but this server's public address is ..." | The record points elsewhere, or the server got a new address after a stop and start. | Point the record at the address named; attach a static IP so that it stays. |
+| `make domain`: "did not answer within 240 seconds", with "Timeout during connect (likely firewall problem)" | Let's Encrypt cannot reach the server. | Open ports 80 and 443 (TCP) in the provider's firewall, then run the command again. |
+| A certificate warning in the browser | Caddy has no certificate for the name, or the name in the browser is not the one that is set. | `docker compose logs --tail 50 caddy`. Caddy keeps trying by itself, with growing pauses. |
+| The login says "this dashboard has a public address (DASHBOARD_DOMAIN) but no password" | A domain is in `.env` and the password line is gone. Nothing is served. | `make password`. |
+| The page does not load at all after a server restart | The server has a new address (no static IP), or Caddy is not running. | `make domain`, `docker compose ps`. |
+
+Failed logins are written to the application's log as `login_failed`, with the address
+Caddy saw (`forwarded_for`).
+
 ## Changing behaviour safely
 
 * Thresholds (stale time, spread and jump limits): `config/instruments.yaml`, then

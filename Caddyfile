@@ -1,0 +1,30 @@
+# FX Signal Lab on a domain of its own (docs/DEPLOY.md, "A domain of your own").
+#
+# Caddy gets and renews the certificate for the name by itself and sends plain http on to
+# https.  Everything else goes to the application as it comes: the application sets its own
+# security headers and decides who is logged in.  Started only with the "domain" profile of
+# docker-compose.yml, which `make domain` turns on.
+{
+	# nothing changes this configuration while it runs, so there is no admin endpoint to guard
+	admin off
+	# two TCP ports are open on the server and no UDP: no HTTP/3 to advertise
+	servers {
+		protocols h1 h2
+	}
+	# for a name ending in .localhost Caddy signs the certificate itself (tests only); it
+	# must not try to add itself to the trust store of the machine it runs on
+	skip_install_trust
+}
+
+{$DASHBOARD_DOMAIN} {
+	# tables of a year are megabytes of JSON; the live stream (a WebSocket) passes untouched
+	encode zstd gzip
+	# the pages and the API do not need to name the programs behind them
+	header {
+		-Server
+		-Via
+	}
+	# the application, by its name inside Compose (another address only when Caddy is tried
+	# out without Compose)
+	reverse_proxy {$DASHBOARD_UPSTREAM:app:8000}
+}

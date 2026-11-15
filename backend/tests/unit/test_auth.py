@@ -103,3 +103,17 @@ def test_login_is_off_without_a_hash_and_fails_closed_with_a_broken_one() -> Non
     assert Auth(None).enabled is False and Auth("").enabled is False
     broken = Auth("this-is-not-a-hash")
     assert broken.enabled is True and broken.problem and "unusable" in broken.problem
+
+
+def test_a_public_address_without_a_password_stays_closed() -> None:
+    """Served on a domain of its own, the dashboard must not be open because a line is missing from .env."""
+    for missing in (None, ""):
+        closed = Auth(missing, public=True)
+        assert closed.enabled is True and closed.problem and "no password" in closed.problem
+        assert "DASHBOARD_DOMAIN" in closed.problem and "make password" in closed.problem
+    # with a password a public address is an ordinary protected one
+    stored = hash_password("correct horse battery", iterations=FAST)
+    usual = Auth(stored, public=True)
+    assert usual.enabled is True and usual.problem is None
+    # and without a public address nothing changes
+    assert Auth(None, public=False).enabled is False

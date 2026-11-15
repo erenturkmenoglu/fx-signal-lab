@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = Field(
         True, description="the session cookie is only sent over HTTPS (keep on for any public address)"
     )
+    dashboard_domain: str = Field(
+        "", description="written by `make domain`: the public name the dashboard is served on; needs a password"
+    )
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
 
@@ -103,6 +106,11 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+    @field_validator("dashboard_domain", mode="before")
+    @classmethod
+    def _a_name_is_written_one_way(cls, v: object) -> object:
+        return v.strip().lower() if isinstance(v, str) else v
 
     # --- derived --------------------------------------------------------------------
     @property
