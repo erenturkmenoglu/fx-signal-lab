@@ -388,3 +388,8 @@ What changed after this report was written:
   workers. Storage and policies worked regardless, which is why no test noticed. The
   file is now mounted on its own, and CI asserts the telemetry level and the tuned
   settings. No database volume existed outside CI, so nothing has to be migrated.
+* **Second defect, fixed: the restore recipe.** The runbook's `pg_restore --clean` had
+  never been run. Tried now, it ends with four errors and a database without the
+  foreign keys of the three hypertables. `make restore` does it the way TimescaleDB
+  requires (restore mode on, `pg_restore`, restore mode off); the result matches the
+  source, and CI backs up and restores the simulator's database on every push.

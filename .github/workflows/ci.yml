@@ -120,6 +120,26 @@ jobs:
           docker compose restart app
           ./.github/wait-ready.sh
           test "$(docker compose logs app | grep -c '"level": "error"')" = "0"
+      - name: A backup restores into an empty database
+        run: |
+          docker compose stop app
+          make backup DB=fxlab_mock
+          docker compose exec -T db psql -U fxlab -d postgres -qc "CREATE DATABASE restore_test OWNER fxlab"
+          make restore DB=restore_test FILE="$(ls backups/fxlab_mock-*.dump)"
+          facts() {
+            docker compose exec -T db psql -U fxlab -d "$1" -Atc "
+              select (select count(*) from quote_ticks) || ' ticks, ' || (select count(*) from obs_1s) || ' seconds, '
+                || (select count(*) from bars) || ' bars, '
+                || (select count(*) from pg_constraint where contype = 'f' and connamespace = 'public'::regnamespace) || ' foreign keys, '
+                || (select count(*) from timescaledb_information.jobs where hypertable_name is not null) || ' policies, restore mode '
+                || current_setting('timescaledb.restoring')"
+          }
+          echo "source:   $(facts fxlab_mock)"
+          echo "restored: $(facts restore_test)"
+          test "$(facts fxlab_mock)" = "$(facts restore_test)"
+          test "$(docker compose exec -T db psql -U fxlab -d restore_test -Atc 'select count(*) from obs_1s')" -ge 5
+          docker compose start app
+          ./.github/wait-ready.sh
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: Logs on failure

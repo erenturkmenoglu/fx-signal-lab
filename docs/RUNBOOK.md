@@ -165,15 +165,25 @@ Containers use the host clock.
 ## Backup and restore
 
 ```bash
-make backup                                             # backups/fxlab-<UTC timestamp>.dump
+make backup                                    # backups/fxlab-<UTC timestamp>.dump
 
 # restore into a fresh stack
 docker compose down
-docker volume rm fx-signal-lab_pgdata                   # deletes the current database
-docker compose up -d db
-docker compose exec -T db pg_restore -U fxlab -d fxlab --clean --if-exists < backups/<file>.dump
-docker compose up -d app
+docker volume rm fx-signal-lab_pgdata          # deletes the current database
+docker compose up -d --wait db                 # an empty database; the application stays stopped
+make restore FILE=backups/<file>.dump
+docker compose up -d
 ```
+
+`pg_dump` prints warnings about circular foreign-key constraints on `hypertable`,
+`chunk` and `continuous_agg`. They concern TimescaleDB's own catalogue and are expected.
+
+`make restore` refuses a database that already has tables and a running application,
+and puts TimescaleDB into its restore mode around `pg_restore`. A plain `pg_restore`
+ends with errors and without the foreign keys of the three hypertables. Checked on
+TimescaleDB 2.26.1 with compressed and uncompressed chunks: the restored database has
+the same rows, constraints, indexes, compression settings and policies as the source,
+and the application runs on it. CI repeats the round trip on every push.
 
 Scheduled backups are not automated yet (Phase 8). Until then, a host cron entry such as
 `0 3 * * * cd /path/to/fx-signal-lab && make backup` is enough; copy the dumps off the
