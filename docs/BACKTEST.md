@@ -221,9 +221,14 @@ trade (the spread). At entry: against the momentum -3.7 points (chance ±4.3), a
 channel's slope +1.2 (±4.5), outside the channel -3.7 (±4.4): nothing, as it must be.
 Afterwards: momentum turned -12.3 (±9.5), price left the channel -10.1 (±4.4): beyond
 chance, as they must be. Random entries on the same year (5 011 trades): the three entry
-lines between -1.4 and +0.7 points, all inside ±4. A single month of the same rule showed
-"against the momentum" at -10 points with ±20 of chance, and leaving those trades out
-turned -9 000 USD into -1 000: that is what a month can do on noise.
+lines between -1.4 and +0.7 points, all inside ±4.
+
+A single month of the same rule shows what a filter does on noise: 179 trades and
+-17 980 USD; with the signals against the momentum left out, 80 trades and -6 210 USD. Most
+of that is trading less than half as often. Each trade still lost (-100 USD a trade became
+-78), and the difference between the two groups, -4.7 points, was a third of what chance
+gives (±14.9). A filter always shrinks a loss that comes from the cost of trading; whether
+it finds better trades is what the difference against chance, and the later days, say.
 
 The command behind the page is `fxlab setup --request -`; the saved setups are served at
 `/api/setups` (`GET`, `PUT`, `DELETE /api/setups/{id}`) and a run at `POST /api/setups/run`.
