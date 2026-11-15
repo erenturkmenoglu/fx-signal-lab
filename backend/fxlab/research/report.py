@@ -35,6 +35,8 @@ MIN_DAYS_FOR_SPLIT = 10
 FEW_TRADES = 30
 #: settings that belong to the instrument, not to the person running a test
 FIXED_BY_INSTRUMENT = ("pip_size", "session_tz", "day_end")
+#: with less history than this before a period, indicators on long bars begin it unsettled
+SHORT_RUN_IN_MS = 5 * DAY_MS
 
 
 class BacktestError(ValueError):
@@ -180,6 +182,43 @@ def inside_the_trading_week(base: Bars, inst: Instrument) -> Bars:
     return Bars(base.ts[keep], base.open[keep], base.high[keep], base.low[keep], base.close[keep], base.seconds)
 
 
+def period_bars(base: Bars, start_ms: int) -> Bars:
+    """The bars of the period itself: ``base`` without the run-in that may come before ``start_ms``."""
+    first = int(np.searchsorted(base.ts, start_ms, side="left"))
+    if first == 0:
+        return base
+    keep = slice(first, None)
+    return Bars(base.ts[keep], base.open[keep], base.high[keep], base.low[keep], base.close[keep], base.seconds)
+
+
+def trading_bars(base: Bars, inst: Instrument, start_ms: int, warnings: list[str]) -> tuple[Bars, Bars]:
+    """The bars a run works on (inside the trading week) and those of them that make up the period."""
+    asked = len(period_bars(base, start_ms))
+    if asked == 0:
+        raise BacktestError("there are no bars in this range")
+    base = inside_the_trading_week(base, inst)
+    shown = period_bars(base, start_ms)
+    if len(shown) < asked:
+        warnings.append(
+            f"{asked - len(shown):,} bars lie outside the instrument's trading week (weekend quotes) and were left out."
+        )
+    if len(shown) == 0:
+        raise BacktestError("there are no bars inside the trading week in this range")
+    return base, shown
+
+
+def run_in_section(base: Bars, shown: Bars, warnings: list[str]) -> str | None:
+    """Where the bars before the period begin (None: there are none), with a warning when they are few."""
+    lead = int(shown.ts[0]) - int(base.ts[0])
+    if lead < SHORT_RUN_IN_MS:
+        had = "No history is" if lead == 0 else f"Only {lead / DAY_MS:.1f} days of history are"
+        warnings.append(
+            f"{had} stored before this period, so the indicators begin it unsettled: its first days have "
+            "fewer signals than they would have had. Download earlier history, or look at later days."
+        )
+    return iso(int(base.ts[0])) if lead > 0 else None
+
+
 def _part(rows: list[dict[str, Any]], days: list[dict[str, Any]], pip_value: float) -> dict[str, Any]:
     return {
         "first_day": days[0]["day"] if days else None,
@@ -222,29 +261,24 @@ def prepare(inst: Instrument, request: BacktestRequest) -> Plan:
 
 
 def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict[str, Any]:
-    """Run ``request`` on ``base`` (the provider's bars of the requested range, already loaded)."""
+    """Run ``request`` on ``base``: the provider's bars of the requested range, already loaded.
+
+    ``base`` may begin before ``request.start_ms``.  Those earlier bars are a run-in: the
+    strategy and the engine run on them so that indicators have settled when the period
+    begins, but only signals known inside the period, and their trades, are reported.
+    """
     plan = prepare(inst, request)
     strategy, base_tf, tf, params, ex = plan.strategy, plan.base_tf, plan.tf, plan.params, plan.execution
     if base_tf.seconds != base.seconds:
         raise BacktestError("the bars given are not of the base timeframe")
-    if len(base) == 0:
-        raise BacktestError("there are no bars in this range")
-
     warnings: list[str] = []
-    asked = len(base)
-    base = inside_the_trading_week(base, inst)
-    if len(base) < asked:
-        warnings.append(
-            f"{asked - len(base):,} bars lie outside the instrument's trading week (weekend quotes) and were left out."
-        )
-    if len(base) == 0:
-        raise BacktestError("there are no bars inside the trading week in this range")
+    base, shown = trading_bars(base, inst, request.start_ms, warnings)
     signal_bars = resample(base, tf.seconds)
     signals = strategy.compute(signal_bars, params, ex.pip_size)
-    outcome = engine.run(base, signal_bars, signals, ex)
+    outcome = engine.since(engine.run(base, signal_bars, signals, ex), signal_bars, request.start_ms)
 
     tz, rollover = inst.session.tz, inst.session.daily_rollover
-    spans = metrics.day_spans(base.ts, tz, rollover)
+    spans = metrics.day_spans(shown.ts, tz, rollover)
     day_names = sorted(spans)
     pip_value = ex.clip_units * ex.pip_size  # quote currency per pip on one clip
 
@@ -270,7 +304,10 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         "currency": inst.quote,
         "unit_currency": inst.base,
         "pip_value": pip_value,
-        "data": data_section(base, tf, base_tf, len(signal_bars), day_names),
+        "data": {
+            **data_section(shown, tf, base_tf, int(np.count_nonzero(signal_bars.ts >= request.start_ms)), day_names),
+            "run_in_from": run_in_section(base, shown, warnings),
+        },
         "signals": dict(outcome.counters),
         "summary": metrics.summarize(rows, daily, pip_value),
         "daily": daily,
@@ -287,7 +324,9 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
             report[name] = _part(part_rows, metrics.daily_rows(part_rows, part_names, pip_value), pip_value)
 
     if ex.max_clips > 1:  # the same signals, one clip only: what adding to positions changed
-        single = engine.run(base, signal_bars, signals, replace(ex, max_clips=1))
+        single = engine.since(
+            engine.run(base, signal_bars, signals, replace(ex, max_clips=1)), signal_bars, request.start_ms
+        )
         single_rows = rows_of(single.trades)
         single_daily = metrics.daily_rows(single_rows, day_names, pip_value)
         report["without_adding"] = {
@@ -302,9 +341,9 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         warnings.append(f"Only {summary['trades']} trades: too few to tell skill from luck.")
     if any(r["reason"] == "end_of_data" for r in rows):
         warnings.append("The last position was still open when the data ended; it is valued at the last price.")
-    if request.start_ms + 4 * DAY_MS < int(base.ts[0]) or int(base.ts[-1]) + 4 * DAY_MS < request.end_ms:
+    if request.start_ms + 4 * DAY_MS < int(shown.ts[0]) or int(shown.ts[-1]) + 4 * DAY_MS < request.end_ms:
         warnings.append(
-            f"The stored history covers {iso(int(base.ts[0]))} to {iso(int(base.ts[-1]))} only, "
+            f"The stored history covers {iso(int(shown.ts[0]))} to {iso(int(shown.ts[-1]))} only, "
             "less than the period asked for."
         )
     report["warnings"] = warnings
@@ -362,7 +401,8 @@ def format_report(report: dict[str, Any], *, trades: int = 0, days: int = 0) -> 
         f"{req['strategy_title']} on {req['symbol']}, {req['timeframe']} bars "
         f"(trades simulated on {req['base_timeframe']} {data['price_basis']} bars)",
         f"Data: {data['first_day']} to {data['last_day']}, {data['trading_days']} trading days, "
-        f"{data['base_bars']:,} bars, {data['holes_over_30_minutes']} holes over 30 minutes",
+        f"{data['base_bars']:,} bars, {data['holes_over_30_minutes']} holes over 30 minutes"
+        + (f"; indicators run in from {data['run_in_from'][:10]}" if data.get("run_in_from") else ""),
         "Parameters: " + ", ".join(f"{k}={v}" for k, v in req["params"].items()),
         f"Trading: clips of {ex['clip_units']:,.0f} {report['unit_currency']}, at most {ex['max_clips']} "
         f"(one more every {ex['add_step_pips']:g} pips), target {ex['target_pips']:g}, stop {ex['stop_pips']:g} "

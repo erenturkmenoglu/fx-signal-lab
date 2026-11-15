@@ -218,6 +218,25 @@ class Outcome:
         self.decisions.append((bar, reason))
 
 
+def since(outcome: Outcome, signal_bars: Bars, start_ms: int) -> Outcome:
+    """The part of an outcome that belongs to the time from ``start_ms`` on.
+
+    A run may begin before the period it is asked about, so that indicators have settled and
+    the engine knows whether a position was open when the period began.  What was signalled
+    before the period is not part of its result: a signal counts from the moment it was known.
+    """
+    kept = Outcome()
+    kept.counters.update({"signals": 0, "traded": 0})
+    span = signal_bars.span_ms
+    for bar, decision in outcome.decisions:
+        if int(signal_bars.ts[bar]) + span >= start_ms:
+            kept.counters["signals"] += 1
+            kept.counters[decision] += 1
+            kept.decisions.append((bar, decision))
+    kept.trades = [trade for trade in outcome.trades if trade.signal_ms >= start_ms]
+    return kept
+
+
 def next_clock_ms(ts_ms: int, time_of_day: str, tz: ZoneInfo) -> int:
     """The first moment at or after ``ts_ms`` at which the wall clock of ``tz`` shows ``time_of_day``.
 

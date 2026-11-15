@@ -2,23 +2,24 @@ import { useEffect, useState } from "react";
 import { ConnectionLog } from "./components/ConnectionLog";
 import { FeedHealth } from "./components/FeedHealth";
 import { GapsPanel } from "./components/GapsPanel";
-import { Header, MockBanner } from "./components/Header";
+import { Header, MockBanner, type View } from "./components/Header";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { MarketMonitor } from "./components/MarketMonitor";
 import { type ChartSource, PriceChart } from "./components/PriceChart";
 import { QuoteBoard } from "./components/QuoteBoard";
 import { SecondsTape } from "./components/SecondsTape";
+import { Board } from "./board/Board";
 import { Lab } from "./lab/Lab";
 import { useLive } from "./live";
 import type { Job } from "./types";
 
-export type View = "live" | "lab";
-const viewFromAddress = (): View => (window.location.hash === "#lab" ? "lab" : "live");
+const viewFromAddress = (): View =>
+  window.location.hash === "#lab" ? "lab" : window.location.hash === "#board" ? "board" : "live";
 
 export function App({ onSignOut }: { onSignOut?: () => void }) {
   const live = useLive();
   const { status, link } = live;
-  // which page is shown lives in the address (#lab), so a reload or a bookmark comes back to it
+  // which page is shown lives in the address (#lab, #board), so a reload or a bookmark comes back to it
   const [view, setView] = useState<View>(viewFromAddress);
   useEffect(() => {
     const follow = () => setView(viewFromAddress());
@@ -26,7 +27,7 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
     return () => window.removeEventListener("hashchange", follow);
   }, []);
   const show = (next: View) => {
-    window.history.replaceState(null, "", next === "lab" ? "#lab" : window.location.pathname + window.location.search);
+    window.history.replaceState(null, "", next === "live" ? window.location.pathname + window.location.search : `#${next}`);
     setView(next);
     window.scrollTo({ top: 0 });
   };
@@ -66,6 +67,8 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
         </Notice>
       ) : view === "lab" ? (
         <Lab symbol={inst?.symbol ?? null} />
+      ) : view === "board" ? (
+        <Board symbol={inst?.symbol ?? null} />
       ) : (
         <main className="mx-auto flex max-w-[1680px] flex-col gap-2 p-2">
           {status.provider.label === "NOT CONFIGURED" ? (

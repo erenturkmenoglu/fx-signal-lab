@@ -18,6 +18,8 @@ export interface StrategyInfo {
   summary: string;
   timeframe: string;
   params: ParamInfo[];
+  short?: string; // a few letters for charts and tables: "RSI"
+  family?: string; // reversion, trend, breakout, level, time, benchmark
 }
 
 export interface HistoryInfo {
@@ -181,6 +183,8 @@ export interface Report {
     last_day: string;
     holes_over_30_minutes: number;
     longest_hole_minutes: number;
+    /** where the bars before the period begin, on which the indicators settle; null when there are none */
+    run_in_from?: string | null;
   };
   signals: Record<string, number>;
   summary: Summary;
@@ -509,6 +513,59 @@ export function tradeMarkers(trades: Trade[], barSeconds: number): Marker[] {
 export function downloadRange(history: HistoryInfo | null, now: number): { start: number; end: number } {
   const start = history ? Date.parse(history.last) - DAY_MS : now - 365 * DAY_MS;
   return { start: Math.max(start, now - 365 * DAY_MS), end: now };
+}
+
+/** The twelve months before the first stored bar (with a day of overlap). */
+export function olderRange(history: HistoryInfo): { start: number; end: number } {
+  const first = Date.parse(history.first);
+  return { start: first - 365 * DAY_MS, end: first + DAY_MS };
+}
+
+/** The longest stretch one download may cover: the server takes a year of minute bars per job. */
+export const DOWNLOAD_LIMIT_MS = 365 * DAY_MS;
+
+export interface Missing {
+  start: number;
+  end: number;
+  /** first and last day of the stretch, for the button that downloads it */
+  from: string;
+  to: string;
+}
+
+/**
+ * The parts of a chosen period (first and last day, both included) that lie outside the stored
+ * history: before its first bar, after its last one, or all of it when nothing is stored.  Nothing
+ * after ``now`` is asked for, a part longer than one download may cover is cut to the stretch next
+ * to what is stored, and Saturdays and Sundays at the edges of a part are not counted as missing:
+ * the market is closed for nearly all of them, and "Update to now" fetches the Sunday evening.
+ */
+export function missingRanges(history: HistoryInfo | null, from: string, to: string, now: number): Missing[] {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Math.min(Date.parse(`${to}T00:00:00Z`) + DAY_MS, now);
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return [];
+  const weekend = (ms: number) => [0, 6].includes(new Date(ms).getUTCDay());
+  const part = (a: number, b: number): Missing | null => {
+    while (a < b && weekend(a)) a += DAY_MS;
+    while (b - DAY_MS >= a && weekend(b - 1)) b -= b % DAY_MS || DAY_MS; // back to the start of that day
+    return a < b ? { start: a, end: b, from: isoDay(a), to: isoDay(b - 1) } : null;
+  };
+  const parts: (Missing | null)[] = [];
+  if (!history) {
+    parts.push(part(Math.max(start, end - DOWNLOAD_LIMIT_MS), end));
+  } else {
+    // whole days: a period that begins on the first stored day is not missing its first hours
+    const first = Date.parse(`${history.first.slice(0, 10)}T00:00:00Z`);
+    const last = Date.parse(`${history.last.slice(0, 10)}T00:00:00Z`) + DAY_MS;
+    if (start < first) {
+      const until = Math.min(end, first);
+      parts.push(part(Math.max(start, until - DOWNLOAD_LIMIT_MS), until));
+    }
+    if (end > last) {
+      const since = Math.max(start, last);
+      parts.push(part(since, Math.min(end, since + DOWNLOAD_LIMIT_MS)));
+    }
+  }
+  return parts.filter((p): p is Missing => p != null);
 }
 
 /** The time range of bars to load for a trading day, with a margin so the first and last trade are not at the edge. */

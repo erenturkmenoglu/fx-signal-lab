@@ -11,7 +11,8 @@ makes every trading decision.
 and checked against Massive with the market closed; live quotes are verified when the
 market next opens. [docs/PHASE1_REPORT.md](docs/PHASE1_REPORT.md) says exactly what was
 built and what is still unverified. On top of it there is now a **backtest engine** with
-four strategies and a **strategy lab** page in the dashboard
+fifteen signal methods, a **strategy lab** page for testing one of them in depth and a
+**signal board** page that runs all of them on every bar length at once
 ([docs/BACKTEST.md](docs/BACKTEST.md)); they have been tested on hand-written and random
 prices, not yet on real history. No strategy here is known to be profitable.
 
@@ -97,8 +98,13 @@ and uses its own database. The application refuses to mix mock and market data.
 A second page, **Strategy lab**, runs a strategy on the stored provider history: the form
 with strategy parameters and trading assumptions, the totals (in-sample next to
 out-of-sample, with adding next to without), the running total by day, and the price chart
-of any day with entries, clips, targets and stops marked on it. See
-[docs/BACKTEST.md](docs/BACKTEST.md).
+of any day with entries, clips, targets and stops marked on it.
+
+A third page, **Signal board**, is the short way: choose a period, press one button, and
+every method runs on bars of every length in the background. It shows, per method and per
+trading day, how many trades worked and how many failed, which method did best each day,
+and a chart of a day, a week or a month with every signal of every method under the price.
+See [docs/BACKTEST.md](docs/BACKTEST.md).
 
 All times are UTC.
 

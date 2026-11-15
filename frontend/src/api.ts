@@ -1,4 +1,5 @@
 import { notifyUnauthorized } from "./auth";
+import type { BoardBody, BoardResult, BoardState, WindowBody, WindowResult } from "./board/model";
 import type { BacktestBody, LabInfo, Report } from "./lab/model";
 import type { Bar, ConnEvent, Gap, Job, Obs, SystemStatus } from "./types";
 
@@ -33,6 +34,12 @@ const query = (params: Record<string, string | number | undefined>) =>
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
     .join("&");
 
+const post = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
 export const api = {
   status: () => request<SystemStatus>("/api/status"),
   observations: (symbol: string, limit: number) =>
@@ -54,10 +61,10 @@ export const api = {
       body: JSON.stringify({ symbol, timeframe, start, end }),
     }),
   lab: (symbol?: string) => request<LabInfo>(`/api/lab${symbol ? `?${query({ symbol })}` : ""}`),
-  backtest: (body: BacktestBody) =>
-    request<Report>("/api/backtests", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+  backtest: (body: BacktestBody) => request<Report>("/api/backtests", post(body)),
+  /** The board run in progress or the last one, and whether a finished board is there to fetch. */
+  board: () => request<BoardState>("/api/board"),
+  startBoard: (body: BoardBody) => request<BoardState>("/api/board/runs", post(body)),
+  boardResult: () => request<BoardResult>("/api/board/result"),
+  boardSignals: (body: WindowBody) => request<WindowResult>("/api/board/signals", post(body)),
 };

@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from fxlab.research.bars import Bars
-from fxlab.research.engine import Execution, Outcome, Signals, Trade, next_clock_ms, run
+from fxlab.research.engine import Execution, Outcome, Signals, Trade, next_clock_ms, run, since
 from fxlab.timeutil import MINUTE_MS, dt_to_ms
 from tests.conftest import T0, utc_ms
 
@@ -401,6 +401,30 @@ def test_what_became_of_each_signal_is_recorded_in_order() -> None:
     assert out.trades[0].signal_ms == T0 + MINUTE_MS and out.trades[1].signal_ms == T0 + 6 * MINUTE_MS
     counted = {reason: sum(1 for _, r in out.decisions if r == reason) for _, reason in out.decisions}
     assert counted == {k: v for k, v in out.counters.items() if k != "signals"}
+
+
+def test_a_run_can_begin_before_the_period_it_is_asked_about() -> None:
+    """Bars before a period settle the indicators; what was signalled before it is not its result."""
+    base = bars([flat(1.1000)] * 12)
+    sig = signals(12, {0: (1, 20.0), 1: (-1, 20.0), 2: (1, 2.0), 5: (-1, 20.0), 11: (1, 20.0)})
+    out = run(base, base, sig, replace(ONE, max_hold_minutes=3, long=True))
+    # a signal is known when its bar has closed: that of bar 2 at 14:03, that of bar 5 at 14:06
+    later = since(out, base, T0 + 3 * MINUTE_MS)
+    assert later.decisions == out.decisions[2:]
+    assert later.trades == out.trades[1:] and later.trades[0].signal_ms == T0 + 6 * MINUTE_MS
+    assert later.counters == {
+        "signals": 3,
+        "traded": 1,
+        "skipped: potential below the minimum": 1,
+        "skipped: no price after the signal": 1,
+    }
+    # one millisecond later the signal of bar 2 is before the period
+    assert since(out, base, T0 + 3 * MINUTE_MS + 1).decisions == out.decisions[3:]
+    # nothing is lost when the period begins with the data, and nothing is left after its end
+    everything = since(out, base, T0)
+    assert (everything.trades, everything.decisions, everything.counters) == (out.trades, out.decisions, out.counters)
+    nothing = since(out, base, T0 + 60 * MINUTE_MS)
+    assert (nothing.trades, nothing.decisions, nothing.counters) == ([], [], {"signals": 0, "traded": 0})
 
 
 def test_directions_can_be_switched_off() -> None:

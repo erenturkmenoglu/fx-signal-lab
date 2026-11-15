@@ -24,8 +24,15 @@ thin slice through Phases 2 to 4, and the rest afterwards.
    day with entry, clip, target and stop marks; running total, daily profit and loss,
    trade list. In-sample and out-of-sample results are shown apart, and the same signals
    without adding next to the result with adding. History is downloaded from the page.
+   - **More methods and the signal board** (done, same caveat): eleven further signal
+     methods from the practitioner's toolbox and from published findings on round numbers
+     and time of day, plus random entries as the line to beat. A third, simpler page runs
+     every method on every bar length in the background and shows, per method and per
+     trading day, the trades that worked and failed, and every signal of every method on a
+     chart of a day, a week or a month. Every run now reads three weeks before its period so
+     that indicators have settled when it begins.
 4. **Live signals** from the strategy that survives, running the same code as the
-   backtest.
+   backtest. The signal board is where they will be shown.
 
 Deferred until that works end to end: the wide indicator library, regime detection,
 the ensemble and multi-timeframe strategies, notifications, the paper-trading journal,

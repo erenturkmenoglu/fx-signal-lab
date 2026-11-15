@@ -122,6 +122,23 @@ table.data tr:last-child td {
 table.data .r {
   text-align: right;
 }
+/* on a phone a table has to show its first columns without being pushed sideways */
+@media (max-width: 480px) {
+  table.data th,
+  table.data td {
+    padding-left: 7px;
+    padding-right: 7px;
+  }
+}
+/* a long table in a box that scrolls: the names of the columns stay in sight */
+table.sticky-head thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-panel);
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--color-line);
+}
 
 .btn {
   font: inherit;

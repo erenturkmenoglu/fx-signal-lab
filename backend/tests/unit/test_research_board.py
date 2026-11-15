@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
 from fxlab.domain.instruments import InstrumentRegistry
@@ -12,7 +13,7 @@ from fxlab.research.bars import Bars, resample
 from fxlab.research.board import BoardRequest, build_board, prepare_board, window_signals
 from fxlab.research.report import BacktestError, BacktestRequest, build_report
 from fxlab.research.strategies import STRATEGIES
-from fxlab.timeutil import DAY_MS, MINUTE_MS, iso
+from fxlab.timeutil import MINUTE_MS, iso
 from tests.conftest import utc_ms
 from tests.unit.test_research_report import market
 
@@ -43,7 +44,12 @@ def result(bars: Bars, eurusd) -> dict:  # type: ignore[no-untyped-def]
 
 def test_a_board_holds_every_strategy_on_every_bar_length(result: dict) -> None:
     ids = [c["id"] for c in result["combos"]]
-    assert ids == [f"{key}@{tf}" for tf in ("5m", "15m") for key in STRATEGIES]
+    # ... except that a strategy which follows the clock is there once, on its usual bars:
+    # the same signals on other bars would be the same line again
+    clock = [key for key, strategy in STRATEGIES.items() if strategy.clock_only]
+    assert clock == ["session_drift"] and STRATEGIES["session_drift"].timeframe == "5m"
+    assert ids == [f"{key}@{tf}" for tf in ("5m", "15m") for key in STRATEGIES if tf == "5m" or key not in clock]
+    assert len(ids) == 2 * len(STRATEGIES) - 1
     assert result["request"]["strategies"] == list(STRATEGIES) and result["request"]["timeframes"] == ["5m", "15m"]
     assert "random_entry@5m" in ids  # the method that knows nothing is always there to compare against
     assert result["variants"] == ["all", "one"] and (result["currency"], result["pip_value"]) == ("USD", 100.0)
@@ -56,7 +62,7 @@ def test_a_board_holds_every_strategy_on_every_bar_length(result: dict) -> None:
         "reversion",
         "5m",
     )
-    assert any("30 methods were tried on the same prices" in w for w in result["warnings"])
+    assert any("29 methods were tried on the same prices" in w for w in result["warnings"])
     json.dumps(result)
 
 
@@ -139,6 +145,53 @@ def test_progress_is_reported_method_by_method(bars: Bars, eurusd) -> None:  # t
     assert [c["id"] for c in out["combos"]] == ["rsi_reversion@15m", "random_entry@15m"]
 
 
+def test_a_strategy_that_follows_the_clock_is_on_the_board_once(bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
+    seen: list[tuple[int, int, str]] = []
+    out = build_board(
+        bars,
+        eurusd,
+        ask(timeframes=["15m", "1h"], strategies=["session_drift", "random_entry"]),
+        lambda *a: seen.append(a),
+    )
+    # its usual five-minute bars were not asked for: it runs on the first length that was
+    assert [c["id"] for c in out["combos"]] == ["session_drift@15m", "random_entry@15m", "random_entry@1h"]
+    assert [s[:2] for s in seen] == [(1, 3), (2, 3), (3, 3)]
+    # and that loses nothing: on other bars it signals on the same occasions (at the same moments
+    # where the bars around the session opens are complete; this market begins at one of the opens)
+    again = build_board(bars, eurusd, ask(timeframes=["5m"], strategies=["session_drift"]))
+    assert again["combos"][0]["signals"] == out["combos"][0]["signals"] > 0
+    assert again["combos"][0]["all"]["trades"] == out["combos"][0]["all"]["trades"] > 0
+
+
+def test_a_board_runs_in_on_the_bars_before_its_period(result: dict, bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
+    """The days of a later period are the same days of the longer board: nothing depends on where a period begins."""
+    later = build_board(bars, eurusd, ask(start="2026-10-13", timeframes=["5m", "15m"]))
+    assert later["days"] == result["days"][6:] and later["day_spans"] == result["day_spans"][6:]
+    assert later["data"]["run_in_from"] == iso(int(bars.ts[0])) and result["data"]["run_in_from"] is None
+    assert later["data"]["base_bars"] == 9 * 15 * 60 and later["data"]["first_day"] == "2026-10-13"
+    assert any(w.startswith("No history is stored before this period") for w in result["warnings"])
+    assert not any("stored before this period" in w for w in later["warnings"])
+    traded = 0
+    for long, short in zip(result["combos"], later["combos"], strict=True):
+        assert long["id"] == short["id"] and 0 <= short["signals"] <= long["signals"]
+        for name in ("all", "one"):
+            for series in ("trades", "wins", "losses", "pnl"):
+                assert short[name]["daily"][series] == long[name]["daily"][series][6:], (long["id"], name, series)
+            assert short[name]["trades"] == sum(long[name]["daily"]["trades"][6:])
+            traded += short[name]["trades"]
+    assert traded > 100
+    # without the earlier bars the first day is thinner for the methods that look far back
+    first = int(np.searchsorted(bars.ts, utc_ms(2026, 10, 13)))
+    late = Bars(bars.ts[first:], bars.open[first:], bars.high[first:], bars.low[first:], bars.close[first:], 60)
+    cold = build_board(late, eurusd, ask(start="2026-10-13", timeframes=["5m", "15m"]))
+    unsettled = {c["id"]: c["signals"] for c in cold["combos"]}
+    settled = {c["id"]: c["signals"] for c in later["combos"]}
+    assert unsettled["macd_cross@15m"] < settled["macd_cross@15m"]  # 26 bars of a quarter of an hour: most of a day
+    assert unsettled["donchian_breakout@15m"] < settled["donchian_breakout@15m"]
+    assert unsettled["random_entry@5m"] == settled["random_entry@5m"]  # looks at nothing: nothing to settle
+    assert sum(unsettled.values()) < sum(settled.values())
+
+
 def test_a_board_without_adding_has_one_set_of_numbers(bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
     out = build_board(
         bars, eurusd, ask(timeframes=["15m"], strategies=["rsi_reversion"], execution={**RULES, "max_clips": 1})
@@ -190,7 +243,21 @@ WINDOW = ("2026-10-15T00:00:00Z", "2026-10-17T00:00:00Z")  # Thursday and Friday
 
 @pytest.fixture(scope="module")
 def window(bars: Bars, eurusd) -> dict:  # type: ignore[no-untyped-def]
-    return window_signals(bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["5m", "15m"]), 10 * DAY_MS)
+    return window_signals(bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["5m", "15m"]))
+
+
+def test_the_trades_of_a_window_are_the_trades_the_board_counts(window: dict, result: dict) -> None:
+    """The chart of a week and the table of days are two views of the same runs."""
+    days = {name: k for k, name in enumerate(result["days"])}
+    for combo in result["combos"]:
+        mine = [s for s in window["signals"] if s["method"] == combo["id"] and "pnl" in s]
+        for day in ("2026-10-15", "2026-10-16"):  # the two trading days the window covers
+            closed = [s for s in mine if iso(s["exit_ms"])[:10] == day]  # this market trades from 06:00 to 21:00 UTC
+            daily = combo["all"]["daily"]
+            assert len(closed) == daily["trades"][days[day]], (combo["id"], day)
+            assert sum(1 for s in closed if s["pnl"] > 0) == daily["wins"][days[day]]
+            assert round(sum(s["pnl"] for s in closed), 2) == daily["pnl"][days[day]]
+    assert sum(1 for s in window["signals"] if "pnl" in s) > 100
 
 
 def test_a_window_holds_every_signal_of_every_method_once(window: dict, bars: Bars) -> None:
@@ -199,12 +266,14 @@ def test_a_window_holds_every_signal_of_every_method_once(window: dict, bars: Ba
     assert signals and all(start <= s["t"] < end for s in signals)
     assert [(s["t"], s["method"]) for s in signals] == sorted((s["t"], s["method"]) for s in signals)
     assert len({(s["t"], s["method"]) for s in signals}) == len(signals)
-    assert len(window["methods"]) == 2 * len(STRATEGIES)
+    assert len(window["methods"]) == 2 * len(STRATEGIES) - 1  # the strategy that follows the clock: once
+    assert [m["id"] for m in window["methods"] if m["strategy"] == "session_drift"] == ["session_drift@5m"]
     assert window["methods"][0] == {
         "id": "rsi_reversion@5m",
         "strategy": "rsi_reversion",
         "short": "RSI",
         "title": "RSI reversion",
+        "family": "reversion",
         "timeframe": "5m",
     }
     # counted independently: the strategy's own signals whose bar closed inside the window
@@ -290,16 +359,15 @@ def test_a_window_comes_with_the_bars_to_draw_it_on(window: dict, bars: Bars) ->
 def test_windows_that_cannot_be_drawn_are_refused(bars: Bars, eurusd, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(board_module, "MAX_CHART_BARS", 100)
     with pytest.raises(BacktestError, match="this window has 360 5m bars; a chart is given at most 100"):
-        window_signals(bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["15m"]), 0)
+        window_signals(bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["15m"]))
     hourly = window_signals(
         bars,
         eurusd,
         ask(start=WINDOW[0], end=WINDOW[1], timeframes=["15m"], chart_timeframe="1h", strategies=["rsi_reversion"]),
-        0,
     )
     assert len(hourly["bars"]["t"]) == 30 and hourly["bars"]["timeframe"] == "1h"
     with pytest.raises(BacktestError, match="no bars in this window"):
-        window_signals(bars, eurusd, ask(start="2026-12-01", end="2026-12-05"), 0)
+        window_signals(bars, eurusd, ask(start="2026-12-01", end="2026-12-05"))
 
 
 def test_a_signal_whose_potential_is_unknown_says_so() -> None:
@@ -309,7 +377,6 @@ def test_a_signal_whose_potential_is_unknown_says_so() -> None:
         bars,
         registry.get("EURUSD"),
         ask(start="2026-10-06", end="2026-10-09", timeframes=["5m"], strategies=["pivot_reversion", "random_entry"]),
-        0,
     )
     assert all(s["potential"] is None or isinstance(s["potential"], float) for s in out["signals"])
     assert any(s["method"] == "random_entry@5m" and s["potential"] == 998.0 for s in out["signals"])

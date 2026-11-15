@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { signedMoney } from "../lab/model";
 import type { ObsStatus } from "../types";
 
 /* State is never colour alone: every pill is a glyph (shape) + a word; only the glyph is coloured. */
@@ -87,6 +88,24 @@ export function Delta({ value, text }: { value: number | null | undefined; text:
         {flat ? "■" : up ? "▲" : "▼"}
       </span>{" "}
       {text}
+    </span>
+  );
+}
+
+/** A result with its sign carried by an arrow as well as by the text; only the arrow is coloured. */
+export function Result({ value, text }: { value: number | null | undefined; text?: string }) {
+  if (value == null) return <span className="text-ink-3">—</span>;
+  const shown = text ?? signedMoney(value);
+  const rounded = Math.round(value);
+  return (
+    <span className="num whitespace-nowrap">
+      <span
+        aria-hidden
+        style={{ color: rounded === 0 ? "var(--color-ink-3)" : rounded > 0 ? "var(--color-up)" : "var(--color-down)" }}
+      >
+        {rounded === 0 ? "■" : rounded > 0 ? "▲" : "▼"}
+      </span>{" "}
+      {shown}
     </span>
   );
 }

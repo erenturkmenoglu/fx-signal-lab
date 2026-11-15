@@ -33,7 +33,9 @@ from fxlab.research.report import (
     data_section,
     inside_the_trading_week,
     resolve_execution,
+    run_in_section,
     split_day_of,
+    trading_bars,
 )
 from fxlab.research.strategies import STRATEGIES, Strategy
 from fxlab.timeutil import iso, parse_time
@@ -161,6 +163,25 @@ def prepare_board(inst: Instrument, request: BoardRequest) -> BoardPlan:
     )
 
 
+def _methods(plan: BoardPlan) -> list[tuple[Timeframe, list[Strategy]]]:
+    """The methods of a board: every strategy on every bar length.
+
+    A strategy that follows the clock signals at the same moments whatever the bars (as long
+    as the bars around its hours are complete), so it is run once, on its usual bar length or
+    the first one asked for, instead of filling the board with copies of one result.
+    """
+    codes = [tf.code for tf in plan.timeframes]
+    out: list[tuple[Timeframe, list[Strategy]]] = []
+    for tf in plan.timeframes:
+        chosen = [
+            strategy
+            for strategy in plan.strategies
+            if not strategy.clock_only or tf.code == (strategy.timeframe if strategy.timeframe in codes else codes[0])
+        ]
+        out.append((tf, chosen))
+    return out
+
+
 def _tally(
     outcome: Outcome, day_index: dict[int, int], days: int, split: int | None, inst: Instrument
 ) -> dict[str, Any]:
@@ -219,27 +240,23 @@ def _tally(
 def build_board(
     base: Bars, inst: Instrument, request: BoardRequest, progress: Progress | None = None
 ) -> dict[str, Any]:
-    """Every method of ``request`` traded on ``base`` (the provider's bars of the period, already loaded)."""
+    """Every method of ``request`` traded on ``base``: the provider's bars of the period, already loaded.
+
+    As for a single backtest, ``base`` may begin before ``request.start_ms``: the methods run
+    on those earlier bars too, and only what was signalled inside the period is counted.
+    """
     plan = prepare_board(inst, request)
     if plan.base_tf.seconds != base.seconds:
         raise BacktestError("the bars given are not of the base timeframe")
-    if len(base) == 0:
-        raise BacktestError("there are no bars in this range")
     warnings: list[str] = []
-    asked = len(base)
-    base = inside_the_trading_week(base, inst)
-    if len(base) < asked:
-        warnings.append(
-            f"{asked - len(base):,} bars lie outside the instrument's trading week (weekend quotes) and were left out."
-        )
-    if len(base) == 0:
-        raise BacktestError("there are no bars inside the trading week in this range")
+    base, shown = trading_bars(base, inst, request.start_ms, warnings)
+    run_in_from = run_in_section(base, shown, warnings)
 
     ex = plan.execution
     tz, rollover = inst.session.tz, inst.session.daily_rollover
-    spans = metrics.day_spans(base.ts, tz, rollover)
+    spans = metrics.day_spans(shown.ts, tz, rollover)
     day_names = sorted(spans)
-    numbers = np.unique(metrics.trading_day_numbers(base.ts, tz, rollover))
+    numbers = np.unique(metrics.trading_day_numbers(shown.ts, tz, rollover))
     day_index = {int(n): k for k, n in enumerate(numbers)}
     split_day = split_day_of(request.split, day_names, warnings)
     split = None if split_day is None else sum(1 for d in day_names if d < split_day)
@@ -247,11 +264,14 @@ def build_board(
     variants: list[tuple[str, Execution]] = [("one", replace(ex, max_clips=1))]
     if ex.max_clips > 1:
         variants.insert(0, ("all", ex))
-    total = len(plan.timeframes) * len(plan.strategies)
+    methods = _methods(plan)
+    total = sum(len(strategies) for _, strategies in methods)
     combos: list[dict[str, Any]] = []
-    for tf in plan.timeframes:
+    for tf, strategies in methods:
         signal_bars = resample(base, tf.seconds)
-        for strategy in plan.strategies:
+        # a signal belongs to the period when it was known inside it: its bar closed at or after the start
+        inside = signal_bars.ts + signal_bars.span_ms >= request.start_ms
+        for strategy in strategies:
             signals = strategy.compute(signal_bars, strategy.resolve(), ex.pip_size)
             combo: dict[str, Any] = {
                 "id": f"{strategy.key}@{tf.code}",
@@ -260,12 +280,11 @@ def build_board(
                 "short": strategy.short or strategy.key,
                 "family": strategy.family,
                 "timeframe": tf.code,
-                "signals": int(np.count_nonzero(signals.direction)),
+                "signals": int(np.count_nonzero(signals.direction[inside])),
             }
             for name, rules in variants:
-                combo[name] = _tally(
-                    engine.run(base, signal_bars, signals, rules), day_index, len(day_names), split, inst
-                )
+                outcome = engine.since(engine.run(base, signal_bars, signals, rules), signal_bars, request.start_ms)
+                combo[name] = _tally(outcome, day_index, len(day_names), split, inst)
             combos.append(combo)
             if progress is not None:
                 progress(len(combos), total, combo["id"])
@@ -289,7 +308,10 @@ def build_board(
         "currency": inst.quote,
         "unit_currency": inst.base,
         "pip_value": ex.clip_units * ex.pip_size,
-        "data": data_section(base, plan.base_tf, plan.base_tf, len(base), day_names),
+        "data": {
+            **data_section(shown, plan.base_tf, plan.base_tf, len(shown), day_names),
+            "run_in_from": run_in_from,
+        },
         "days": day_names,
         "day_spans": [list(spans[d]) for d in day_names],
         "split_day": split_day,
@@ -299,13 +321,13 @@ def build_board(
     }
 
 
-def window_signals(base: Bars, inst: Instrument, request: BoardRequest, run_in_ms: int) -> dict[str, Any]:
+def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[str, Any]:
     """Every signal of every method between ``request.start_ms`` and ``request.end_ms``.
 
-    ``base`` starts ``run_in_ms`` before the window so that indicators have settled and the
-    engine knows whether a position was open when the window began, and it may run on past the
-    end so that a trade opened late in the window can finish.  Only signals and bars of the
-    window itself are returned.
+    ``base`` begins before the window (the run-in: indicators have settled, and the engine knows
+    whether a position was open when the window began) and may run on past its end, so that a
+    trade opened late in the window can finish.  Only signals and bars of the window itself
+    are returned.
     """
     plan = prepare_board(inst, request)
     if plan.base_tf.seconds != base.seconds:
@@ -324,10 +346,11 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest, run_in_m
             "Choose a shorter window or longer bars."
         )
     ex = plan.execution
+    methods = _methods(plan)
     found: list[dict[str, Any]] = []
-    for tf in plan.timeframes:
+    for tf, strategies in methods:
         signal_bars = resample(base, tf.seconds)
-        for strategy in plan.strategies:
+        for strategy in strategies:
             signals = strategy.compute(signal_bars, strategy.resolve(), ex.pip_size)
             outcome = engine.run(base, signal_bars, signals, ex)
             trades = iter(outcome.trades)
@@ -376,10 +399,11 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest, run_in_m
                 "strategy": s.key,
                 "short": s.short or s.key,
                 "title": s.title,
+                "family": s.family,
                 "timeframe": tf.code,
             }
-            for tf in plan.timeframes
-            for s in plan.strategies
+            for tf, strategies in methods
+            for s in strategies
         ],
         "bars": {
             "timeframe": plan.chart_tf.code,

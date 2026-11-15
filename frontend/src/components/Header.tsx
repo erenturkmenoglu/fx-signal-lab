@@ -3,6 +3,13 @@ import type { Link } from "../live";
 import type { SystemStatus } from "../types";
 import { StatePill, type Tone } from "./ui";
 
+export type View = "live" | "lab" | "board";
+const PAGES: { view: View; label: string }[] = [
+  { view: "live", label: "Live" },
+  { view: "lab", label: "Strategy lab" },
+  { view: "board", label: "Signal board" },
+];
+
 const PROVIDER: Record<SystemStatus["provider"]["label"], { tone: Tone; text: string }> = {
   LIVE: { tone: "ok", text: "Live market data" },
   MOCK: { tone: "warn", text: "Mock data" },
@@ -21,8 +28,8 @@ export function Header({
   link: Link;
   /** present only when this installation has a login */
   onSignOut?: () => void;
-  view: "live" | "lab";
-  onView: (view: "live" | "lab") => void;
+  view: View;
+  onView: (view: View) => void;
 }) {
   const provider = status?.provider;
   const badge = provider ? PROVIDER[provider.label] : null;
@@ -35,12 +42,11 @@ export function Header({
       </div>
 
       <nav className="flex items-center gap-1" aria-label="Pages">
-        <button type="button" className="btn" aria-pressed={view === "live"} onClick={() => onView("live")}>
-          Live
-        </button>
-        <button type="button" className="btn" aria-pressed={view === "lab"} onClick={() => onView("lab")}>
-          Strategy lab
-        </button>
+        {PAGES.map((page) => (
+          <button key={page.view} type="button" className="btn" aria-pressed={view === page.view} onClick={() => onView(page.view)}>
+            {page.label}
+          </button>
+        ))}
       </nav>
 
       {badge && provider ? (

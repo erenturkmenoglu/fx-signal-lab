@@ -24,6 +24,8 @@ from fxlab.timeutil import DAY_MS, dt_to_ms, iso, ms_to_dt
 MAX_RANGE_MS = 3 * 366 * DAY_MS
 #: the most bars one test may load: each costs about 40 bytes in memory and the server is small
 MAX_BARS = 3_000_000
+#: bars loaded before a period so that indicators have settled when it begins: three weeks
+RUN_IN_MS = 21 * DAY_MS
 
 
 async def _instrument_id(engine: AsyncEngine, symbol: str) -> int | None:
@@ -90,27 +92,45 @@ def check_request(registry: InstrumentRegistry, request: BacktestRequest) -> Non
     prepare(registry.get(request.symbol), request)
 
 
-async def _stored_bars(engine: AsyncEngine, symbol: str, base_tf: Timeframe, start_ms: int, end_ms: int) -> Bars:
-    """The provider's bars of an instrument in a range, or a ``BacktestError`` that says what to do."""
+async def _stored_bars(
+    engine: AsyncEngine,
+    symbol: str,
+    base_tf: Timeframe,
+    start_ms: int,
+    end_ms: int,
+    *,
+    lead_ms: int = RUN_IN_MS,
+    tail_ms: int = 0,
+) -> Bars:
+    """The provider's bars of an instrument for a period, or a ``BacktestError`` that says what to do.
+
+    With the bars of the period come those of ``lead_ms`` before it (as far as they are stored:
+    the run-in on which indicators settle) and of ``tail_ms`` after it.
+    """
     instrument_id = await _instrument_id(engine, symbol)
     bars = None
     if instrument_id is not None:
         b = s.bars
-        count = select(func.count()).where(
+        stored = select(
+            func.count(), func.count().filter(b.c.ts >= ms_to_dt(start_ms), b.c.ts < ms_to_dt(end_ms))
+        ).where(
             b.c.instrument_id == instrument_id,
             b.c.timeframe == base_tf.code,
             b.c.source == PROVIDER_SOURCE,
-            b.c.ts >= ms_to_dt(start_ms),
-            b.c.ts < ms_to_dt(end_ms),
+            b.c.ts >= ms_to_dt(start_ms - lead_ms),
+            b.c.ts < ms_to_dt(end_ms + tail_ms),
         )
         async with engine.connect() as conn:
-            stored = int((await conn.execute(count)).scalar_one())
-        if stored > MAX_BARS:
+            loaded, inside = (int(value) for value in (await conn.execute(stored)).one())
+        if loaded > MAX_BARS:
             raise BacktestError(
-                f"this period holds {stored:,} {base_tf.code} bars; one test loads at most {MAX_BARS:,}. "
+                f"this period holds {loaded:,} {base_tf.code} bars; one test loads at most {MAX_BARS:,}. "
                 "Choose a shorter period or longer base bars."
             )
-        bars = await load_provider_bars(engine, instrument_id, base_tf.code, base_tf.seconds, start_ms, end_ms)
+        if inside:
+            bars = await load_provider_bars(
+                engine, instrument_id, base_tf.code, base_tf.seconds, start_ms - lead_ms, end_ms + tail_ms
+            )
     if bars is None or len(bars) == 0:
         raise BacktestError(
             f"no {base_tf.code} history of {symbol} is stored between {iso(start_ms)} and "
@@ -131,8 +151,6 @@ async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, reques
 
 # --- many methods at once ------------------------------------------------------------------
 
-#: bars loaded before a window of signals so that indicators have settled: three weeks
-RUN_IN_MS = 21 * DAY_MS
 #: the longest window of signals (the chart under it holds 20 000 bars at most anyway)
 MAX_WINDOW_MS = 62 * DAY_MS
 
@@ -165,6 +183,6 @@ async def run_window(engine: AsyncEngine, registry: InstrumentRegistry, request:
     check_board(registry, request, window=True)
     inst = registry.get(request.symbol)
     base_tf = prepare_board(inst, request).base_tf
-    # three weeks before the window for the indicators, a day after it for the last trades to finish
-    bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms - RUN_IN_MS, request.end_ms + DAY_MS)
-    return window_signals(bars, inst, request, RUN_IN_MS)
+    # with the run-in before the window come the bars of a day after it, for its last trades to finish
+    bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms, request.end_ms, tail_ms=DAY_MS)
+    return window_signals(bars, inst, request)

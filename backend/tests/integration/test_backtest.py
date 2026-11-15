@@ -200,7 +200,7 @@ async def test_the_signals_of_a_window_from_the_database(engine: AsyncEngine, re
     # what is loaded: three weeks before the window (here: from the start of the data) and one day after it
     loaded = bars.ts < utc_ms(2026, 10, 18)
     part = Bars(bars.ts[loaded], bars.open[loaded], bars.high[loaded], bars.low[loaded], bars.close[loaded], 60)
-    assert window == window_signals(part, registry.get("EURUSD"), request, 0)
+    assert window == window_signals(part, registry.get("EURUSD"), request)
     assert window["signals"] and len(window["bars"]["t"]) == 2 * 60  # two days of 15 hours in quarter hours
     # a trade opened on the last evening of the window is followed to its end on that day
     assert not any(s["status"] == "end_of_data" for s in window["signals"])
@@ -209,6 +209,52 @@ async def test_the_signals_of_a_window_from_the_database(engine: AsyncEngine, re
     with pytest.raises(BacktestError, match="no 1m history of EURUSD is stored between"):
         await run_window(
             engine, registry, BoardRequest.from_mapping({**WINDOW, "start": "2026-03-02", "end": "2026-03-04"})
+        )
+
+
+async def test_runs_from_the_database_begin_three_weeks_before_their_period(
+    engine: AsyncEngine, registry: InstrumentRegistry
+) -> None:
+    """The bars before a period are loaded with it, as far back as three weeks, and used as its run-in."""
+    bars = market(days=30)  # six weeks from Monday 5 October 2026
+    await store(engine, registry, bars)
+    inst = registry.get("EURUSD")
+    run_in = utc_ms(2026, 10, 12)  # three weeks before Monday 2 November
+
+    def loaded(until_ms: int, since_ms: int = run_in) -> Bars:
+        keep = (bars.ts >= since_ms) & (bars.ts < until_ms)
+        return Bars(bars.ts[keep], bars.open[keep], bars.high[keep], bars.low[keep], bars.close[keep], 60)
+
+    request = BacktestRequest.from_mapping({**REQUEST, "start": "2026-11-02", "end": "2026-11-07"})
+    report = await run_backtest(engine, registry, request)
+    assert report == build_report(loaded(utc_ms(2026, 11, 7)), inst, request)
+    assert report["data"]["run_in_from"] == iso(utc_ms(2026, 10, 12, 6))
+    assert (report["data"]["first_day"], report["data"]["trading_days"]) == ("2026-11-02", 5)
+    assert report["data"]["base_bars"] == 5 * 900 and report["summary"]["trades"] > 10
+    assert not any("stored before this period" in w for w in report["warnings"])
+    # the period alone, as it was read before there was a run-in, gives another first day
+    cold = build_report(loaded(utc_ms(2026, 11, 7), utc_ms(2026, 11, 2)), inst, request)
+    assert cold["signals"]["signals"] < report["signals"]["signals"]
+
+    board_request = BoardRequest.from_mapping({**BOARD, "start": "2026-11-02", "end": "2026-11-07"})
+    board = await run_board(engine, registry, board_request)
+    assert board == build_board(loaded(utc_ms(2026, 11, 7)), inst, board_request)
+    assert board["data"]["run_in_from"] == iso(utc_ms(2026, 10, 12, 6)) and len(board["days"]) == 5
+
+    # a window: the same run-in before it, and a day after its end for its last trades
+    window_request = BoardRequest.from_mapping({**WINDOW, "start": "2026-11-03", "end": "2026-11-05"})
+    window = await run_window(engine, registry, window_request)
+    assert window == window_signals(loaded(utc_ms(2026, 11, 6), utc_ms(2026, 10, 13)), inst, window_request)
+    assert window["run_in_from"] == iso(utc_ms(2026, 10, 13, 6))
+
+    # bars before a period do not make a period: there must be bars inside it
+    with pytest.raises(BacktestError, match="no 1m history of EURUSD is stored between 2026-11-14"):
+        await run_backtest(
+            engine, registry, BacktestRequest.from_mapping({**REQUEST, "start": "2026-11-14", "end": "2026-11-21"})
+        )
+    with pytest.raises(BacktestError, match="no 1m history of EURUSD is stored between 2026-11-14"):
+        await run_board(
+            engine, registry, BoardRequest.from_mapping({**BOARD, "start": "2026-11-14", "end": "2026-11-21"})
         )
 
 

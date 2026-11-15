@@ -19,7 +19,7 @@ from fxlab.research.report import (
     format_report,
     resolve_execution,
 )
-from fxlab.timeutil import MINUTE_MS
+from fxlab.timeutil import MINUTE_MS, iso
 from tests.conftest import utc_ms
 
 EX = Execution()
@@ -337,6 +337,59 @@ def test_a_report_warns_about_what_weakens_it(eurusd) -> None:  # type: ignore[n
     open_end = build_report(part, eurusd, request(split="none"))
     assert open_end["trades"][-1]["reason"] == "end_of_data"
     assert any("still open when the data ended" in w for w in open_end["warnings"])
+
+
+def numberless(rows: list[dict]) -> list[dict]:
+    return [{k: v for k, v in row.items() if k != "n"} for row in rows]
+
+
+@pytest.mark.parametrize(
+    ("strategy", "timeframe"),
+    [("bollinger_reversion", "5m"), ("donchian_breakout", "15m"), ("macd_cross", "15m"), ("pivot_reversion", "5m")],
+)
+def test_bars_before_the_period_let_the_indicators_settle(eurusd, strategy: str, timeframe: str) -> None:  # type: ignore[no-untyped-def]
+    """A period reported with earlier bars as run-in is the later part of the longer report."""
+    bars = market()  # three weeks from Monday 5 October 2026
+    start = utc_ms(2026, 10, 13)
+    whole = build_report(bars, eurusd, request(strategy=strategy, timeframe=timeframe))
+    warm = build_report(bars, eurusd, request(strategy=strategy, timeframe=timeframe, start="2026-10-13"))
+    tail = [t for t in whole["trades"] if t["signal_ms"] >= start]
+    assert numberless(warm["trades"]) == numberless(tail) and 0 < len(tail) < len(whole["trades"])
+    assert [t["n"] for t in warm["trades"]] == list(range(1, len(tail) + 1))
+    # the period is what was asked for: its days, its bars, its signals
+    assert (warm["data"]["first_day"], warm["data"]["first_bar"]) == ("2026-10-13", iso(utc_ms(2026, 10, 13, 6)))
+    assert warm["data"]["trading_days"] == 9 and warm["data"]["base_bars"] == 9 * 15 * 60
+    assert [d["day"] for d in warm["daily"]] == [d["day"] for d in whole["daily"]][-9:]
+    assert warm["daily"][0]["first_bar_ms"] == utc_ms(2026, 10, 13, 6)
+    assert sum(d["trades"] for d in warm["daily"]) == len(tail) == warm["signals"]["traded"]
+    assert warm["signals"]["signals"] == sum(v for k, v in warm["signals"].items() if k != "signals")
+    assert warm["signals"]["signals"] < whole["signals"]["signals"]
+    assert warm["without_adding"]["summary"]["trades"] <= whole["without_adding"]["summary"]["trades"]
+    # the report says where its run-in began, and warns when there is none
+    assert warm["data"]["run_in_from"] == iso(int(bars.ts[0])) and whole["data"]["run_in_from"] is None
+    assert not any("stored before this period" in w for w in warm["warnings"])
+    assert any(w.startswith("No history is stored before this period") for w in whole["warnings"])
+
+    # the same days without the earlier bars: the indicators begin unsettled, and the first day shows it
+    first = int(np.searchsorted(bars.ts, start))
+    late = Bars(bars.ts[first:], bars.open[first:], bars.high[first:], bars.low[first:], bars.close[first:], 60)
+    cold = build_report(late, eurusd, request(strategy=strategy, timeframe=timeframe, start="2026-10-13"))
+    assert cold["data"]["run_in_from"] is None and cold["data"]["base_bars"] == warm["data"]["base_bars"]
+    assert cold["signals"]["signals"] < warm["signals"]["signals"]
+    assert cold["daily"][0]["trades"] < warm["daily"][0]["trades"]
+
+
+def test_a_short_run_in_is_said_to_be_short(eurusd) -> None:  # type: ignore[no-untyped-def]
+    bars = market()
+    report = build_report(bars, eurusd, request(start="2026-10-07"))  # the data begins two days earlier
+    assert report["data"]["run_in_from"] == iso(int(bars.ts[0]))
+    assert any(w.startswith("Only 2.0 days of history are stored before this period") for w in report["warnings"])
+    enough = build_report(bars, eurusd, request(start="2026-10-12"))  # a week of it
+    assert not any("stored before this period" in w for w in enough["warnings"])
+    assert "13,500 bars" not in format_report(enough) and "indicators run in from 2026-10-05" in format_report(enough)
+    assert "run in from" not in format_report(build_report(bars, eurusd, request()))
+    with pytest.raises(BacktestError, match="there are no bars in this range"):
+        build_report(bars, eurusd, request(start="2026-11-02", end="2026-11-06"))  # a run-in and nothing after it
 
 
 def test_quotes_from_the_weekend_are_not_traded(eurusd) -> None:  # type: ignore[no-untyped-def]

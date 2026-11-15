@@ -91,6 +91,8 @@ class Strategy:
     compute: Callable[[Bars, Values, float], Signals]
     short: str = ""  # a few letters for marks on a chart
     family: str = "reversion"  # reversion | trend | breakout | level | time | benchmark
+    #: its signals follow the clock, not the shape of the bars: one bar length says all there is
+    clock_only: bool = False
     #: raises ValueError when values that are each allowed do not go together
     check: Callable[[Values], None] | None = None
 
@@ -722,6 +724,7 @@ STRATEGIES: dict[str, Strategy] = {
             key="session_drift",
             short="TOD",
             family="time",
+            clock_only=True,
             title="Time of day",
             summary=(
                 "Trades the clock, not the price: sells when one session opens and buys when another does, on the "

@@ -228,6 +228,58 @@ jobs:
           import json, sys
           s = json.load(sys.stdin)
           assert s['connection']['state'] == 'streaming', s['connection']"
+      - name: The signal board runs every method in the background
+        run: |
+          # three weeks, with the week before them stored: that week is the run-in
+          curl -fsS -H 'Content-Type: application/json' \
+            -d '{"symbol": "EURUSD", "start": "2026-10-12", "end": "2026-10-31"}' \
+            http://127.0.0.1:8000/api/board/runs > /dev/null
+          for _ in $(seq 1 180); do
+            curl -fsS http://127.0.0.1:8000/api/board > state.json
+            python3 -c "import json, sys; sys.exit(json.load(open('state.json'))['run']['status'] == 'running')" && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/api/board/result > board.json
+          # the signals of the last week of it, as the chart of the page asks for them
+          python3 -c "
+          import json
+          board = json.load(open('board.json'))
+          first, last = board['day_spans'][-5][0], board['day_spans'][-1][1] + 60000
+          from datetime import datetime, timezone
+          iso = lambda ms: datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+          json.dump({'symbol': 'EURUSD', 'start': iso(first), 'end': iso(last), 'chart_timeframe': '5m'}, open('ask.json', 'w'))"
+          curl -fsS -H 'Content-Type: application/json' -d @ask.json http://127.0.0.1:8000/api/board/signals > window.json
+          python3 -c "
+          import json
+          state, board, window = (json.load(open(name)) for name in ('state.json', 'board.json', 'window.json'))
+          run = state['run']
+          assert run['status'] == 'done' and run['error'] is None, run
+          assert run['done'] == run['total'] == len(board['combos']) > 60, (run, len(board['combos']))
+          assert len(board['days']) == 15 and board['days'][0] == '2026-10-12', board['days']
+          assert board['data']['run_in_from'] is not None and board['data']['run_in_from'] < '2026-10-12', board['data']
+          assert any(c['family'] == 'benchmark' for c in board['combos'])
+          assert sum(c['all']['trades'] for c in board['combos']) > 200
+          # the trades of the window are the trades the board counts for those days
+          spans = board['day_spans'][-5:]
+          def day(ms):
+              return next(k for k, (a, b) in enumerate(spans) if a <= ms <= b + 60000)
+          for combo in board['combos']:
+              got = [0] * 5
+              for s in window['signals']:
+                  if s['method'] == combo['id'] and 'pnl' in s:
+                      got[day(s['exit_ms'])] += 1
+              assert got == combo['all']['daily']['trades'][-5:], (combo['id'], got, combo['all']['daily']['trades'][-5:])
+          assert len(window['bars']['t']) > 1000 and len(window['methods']) == len(board['combos'])
+          print('ok:', len(board['combos']), 'methods,', sum(c['all']['trades'] for c in board['combos']), 'trades,',
+                len(window['signals']), 'signals in the last week')"
+          # a second run cannot be started with a broken request, and the feed is still streaming
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"symbol": "EURUSD", "start": "2026-10-12", "end": "2026-10-31", "strategies": ["martingale"]}' \
+            http://127.0.0.1:8000/api/board/runs)" = "400"
+          curl -fsS http://127.0.0.1:8000/api/status | python3 -c "
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s['connection']['state'] == 'streaming', s['connection']"
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: Logs on failure

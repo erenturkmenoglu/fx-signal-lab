@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { dateTimeUTC, fixed, price } from "../format";
-import { Panel } from "../components/ui";
+import { Panel, Result } from "../components/ui";
 import { DayChart, EquityChart } from "./LabCharts";
 import {
   type Day,
@@ -16,24 +16,6 @@ import {
   signedPips,
   units,
 } from "./model";
-
-/** A result with its sign carried by an arrow as well as by the text; only the arrow is coloured. */
-function Result({ value, text }: { value: number | null | undefined; text?: string }) {
-  if (value == null) return <span className="text-ink-3">—</span>;
-  const shown = text ?? signedMoney(value);
-  const rounded = Math.round(value);
-  return (
-    <span className="num whitespace-nowrap">
-      <span
-        aria-hidden
-        style={{ color: rounded === 0 ? "var(--color-ink-3)" : rounded > 0 ? "var(--color-up)" : "var(--color-down)" }}
-      >
-        {rounded === 0 ? "■" : rounded > 0 ? "▲" : "▼"}
-      </span>{" "}
-      {shown}
-    </span>
-  );
-}
 
 type Row = { label: string; help?: string; cell: (s: Summary) => React.ReactNode };
 
@@ -384,6 +366,7 @@ export function LabResults({
           <strong className="font-semibold">{req.strategy_title}</strong> on {req.symbol}: signals from {req.timeframe} bars,
           trades simulated on {report.data.base_bars.toLocaleString("en-US")} {req.base_timeframe} {report.data.price_basis}{" "}
           bars from {report.data.first_day} to {report.data.last_day} ({report.data.trading_days} trading days).
+          {report.data.run_in_from ? ` The indicators had the bars from ${report.data.run_in_from.slice(0, 10)} on to settle.` : ""}
         </p>
         <p className="note m-0 mt-1">
           Clips of {units(req.execution.clip_units)} {report.unit_currency}, at most {req.execution.max_clips}; target{" "}

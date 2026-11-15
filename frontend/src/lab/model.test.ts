@@ -6,7 +6,9 @@ import {
   downloadRange,
   defaultForm,
   equitySeries,
+  missingRanges,
   money,
+  olderRange,
   paramValue,
   percent,
   ratio,
@@ -346,6 +348,60 @@ describe("downloading history", () => {
   it("never asks for more than a year at once", () => {
     const old = { ...info.history[1]!, last: "2024-01-01T00:00:00.000Z" };
     expect(downloadRange(old, now)).toEqual({ start: now - 365 * day, end: now });
+  });
+
+  it("reaches back twelve months before the first stored bar", () => {
+    const history = info.history[1]!; // begins 2025-11-03 00:00
+    expect(olderRange(history)).toEqual({ start: Date.UTC(2024, 10, 3), end: Date.UTC(2025, 10, 4) });
+  });
+});
+
+describe("a chosen period and what is stored", () => {
+  const now = Date.UTC(2026, 10, 15, 12, 0, 0); // a Sunday at noon
+  // one day is stored: Friday 13 November 2026
+  const friday = { timeframe: "1m", seconds: 60, bars: 1320, first: "2026-11-13T00:00:00.000Z", last: "2026-11-13T21:59:00.000Z" };
+  const days = (parts: { from: string; to: string }[]) => parts.map((p) => `${p.from}..${p.to}`);
+
+  it("misses nothing when the period lies inside the stored history", () => {
+    expect(missingRanges(friday, "2026-11-13", "2026-11-13", now)).toEqual([]);
+    expect(missingRanges(info.history[1]!, "2026-01-05", "2026-11-13", now)).toEqual([]);
+  });
+
+  it("names the days before the first stored one", () => {
+    const [part, ...rest] = missingRanges(friday, "2026-10-14", "2026-11-13", now);
+    expect(rest).toEqual([]);
+    expect(part).toEqual({ start: Date.UTC(2026, 9, 14), end: Date.UTC(2026, 10, 13), from: "2026-10-14", to: "2026-11-12" });
+  });
+
+  it("names the days after the last stored one, up to now", () => {
+    const thursday = { ...friday, first: "2026-11-02T00:00:00.000Z", last: "2026-11-05T21:59:00.000Z" };
+    expect(days(missingRanges(thursday, "2026-11-02", "2026-11-30", now))).toEqual(["2026-11-06..2026-11-13"]);
+    // both sides at once: two parts, the earlier one first
+    expect(days(missingRanges(thursday, "2026-10-26", "2026-11-11", now))).toEqual([
+      "2026-10-26..2026-10-30",
+      "2026-11-06..2026-11-11",
+    ]);
+  });
+
+  it("does not call a weekend missing", () => {
+    // stored to Friday, asked to Sunday: the market was closed
+    expect(missingRanges(friday, "2026-11-13", "2026-11-15", now)).toEqual([]);
+    expect(missingRanges(friday, "2026-11-07", "2026-11-13", now).map((p) => p.from)).toEqual(["2026-11-09"]);
+    // a period of weekend days only
+    expect(missingRanges(null, "2026-11-14", "2026-11-15", now)).toEqual([]);
+  });
+
+  it("asks for all of the period when nothing is stored, and never for the future", () => {
+    expect(days(missingRanges(null, "2026-11-02", "2026-12-31", now))).toEqual(["2026-11-02..2026-11-13"]);
+    expect(missingRanges(null, "2026-11-16", "2026-11-20", now)).toEqual([]);
+    expect(missingRanges(null, "", "2026-11-20", now)).toEqual([]);
+  });
+
+  it("cuts a part that one download cannot cover to the year next to what is stored", () => {
+    const [before] = missingRanges(friday, "2020-01-01", "2026-11-13", now);
+    expect(before?.end).toBe(Date.UTC(2026, 10, 13));
+    expect(before && before.end - before.start).toBeLessThanOrEqual(365 * 86_400_000);
+    expect(before?.from).toBe("2025-11-13");
   });
 });
 

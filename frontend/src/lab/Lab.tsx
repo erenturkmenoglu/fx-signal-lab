@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { Panel } from "../components/ui";
-import type { Job } from "../types";
+import { DownloadButtons, DownloadNote, useHistoryDownload } from "./history";
 import { LabResults } from "./LabResults";
 import {
   EXECUTION_FIELDS,
@@ -14,6 +14,7 @@ import {
   buildRequest,
   defaultForm,
   downloadRange,
+  missingRanges,
   paramValue,
   restoreForm,
   stored,
@@ -97,8 +98,6 @@ export function Lab({ symbol }: { symbol: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const results = useRef<HTMLDivElement>(null);
-  const [job, setJob] = useState<Job | null>(null);
-  const [jobError, setJobError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     api
@@ -112,22 +111,8 @@ export function Lab({ symbol }: { symbol: string | null }) {
   }, [symbol]);
   useEffect(refresh, [refresh]);
 
-  // a history download in progress: watched until it ends, then the stored history is read again
-  const downloading = job?.status === "queued" || job?.status === "running";
-  const jobId = job?.id;
-  useEffect(() => {
-    if (!downloading || jobId == null) return;
-    const timer = setInterval(() => {
-      api
-        .job(jobId)
-        .then((next) => {
-          setJob(next);
-          if (next.status === "done") refresh();
-        })
-        .catch(() => undefined); // a failed poll is tried again
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [downloading, jobId, refresh]);
+  // a history download is watched until it ends, then the stored history is read again
+  const download = useHistoryDownload(info?.symbol ?? null, refresh);
 
   // once history exists and no period has been chosen yet: the whole stored period
   useEffect(() => {
@@ -149,6 +134,18 @@ export function Lab({ symbol }: { symbol: string | null }) {
   }, []);
 
   const strategy = useMemo(() => info?.strategies.find((s) => s.key === form?.strategy) ?? null, [info, form?.strategy]);
+
+  // a form that covered everything stored keeps doing so when more history has been downloaded
+  const whole = info && form ? storedPeriod(info, form.base) : null;
+  const wholeFrom = whole?.from ?? null;
+  const wholeTo = whole?.to ?? null;
+  const before = useRef<{ from: string; to: string } | null>(null);
+  useEffect(() => {
+    const was = before.current;
+    before.current = wholeFrom && wholeTo ? { from: wholeFrom, to: wholeTo } : null;
+    if (!was || !wholeFrom || !wholeTo || (was.from === wholeFrom && was.to === wholeTo)) return;
+    update((f) => (f.from === was.from && f.to === was.to ? { ...f, from: wholeFrom, to: wholeTo } : f));
+  }, [wholeFrom, wholeTo, update]);
 
   if (loadError && !info) {
     return (
@@ -194,36 +191,9 @@ export function Lab({ symbol }: { symbol: string | null }) {
     }
   };
 
-  const download = async () => {
-    const range = downloadRange(stored(info, "1m"), Date.now());
-    setJobError(null);
-    try {
-      setJob(await api.createJob(info.symbol, "1m", range.start, range.end));
-    } catch (e) {
-      setJobError(e instanceof Error ? e.message : String(e));
-    }
-  };
-  const downloadNote = downloading ? (
-    <span className="note">
-      Downloading one-minute bars: {(job?.rows_written ?? 0).toLocaleString("en-US")} so far…
-    </span>
-  ) : job?.status === "failed" ? (
-    <span role="alert" className="text-[13px]">
-      <span aria-hidden style={{ color: "var(--color-bad)" }}>
-        ✕
-      </span>{" "}
-      The download failed: {job.error ?? "no reason given"}
-    </span>
-  ) : job?.status === "done" ? (
-    <span className="note">Downloaded {job.rows_written.toLocaleString("en-US")} bars.</span>
-  ) : jobError ? (
-    <span role="alert" className="text-[13px]">
-      <span aria-hidden style={{ color: "var(--color-bad)" }}>
-        ✕
-      </span>{" "}
-      {jobError}
-    </span>
-  ) : null;
+  // downloads bring one-minute bars: what is missing is said only when the run is simulated on those
+  const minutes = stored(info, "1m");
+  const missing = form.base === "1m" ? missingRanges(minutes, form.from, form.to, Date.now()) : [];
 
   const setExecution = (field: ExecutionField, value: string) =>
     update((f) => ({ ...f, execution: { ...f.execution, [field]: value } }));
@@ -297,8 +267,6 @@ export function Lab({ symbol }: { symbol: string | null }) {
                 className="field num"
                 type="date"
                 value={form.from}
-                min={period?.from}
-                max={period?.to}
                 onChange={(e) => update((f) => ({ ...f, from: e.target.value }))}
               />
             </Field>
@@ -307,8 +275,6 @@ export function Lab({ symbol }: { symbol: string | null }) {
                 className="field num"
                 type="date"
                 value={form.to}
-                min={period?.from}
-                max={period?.to}
                 onChange={(e) => update((f) => ({ ...f, to: e.target.value }))}
               />
             </Field>
@@ -332,8 +298,6 @@ export function Lab({ symbol }: { symbol: string | null }) {
                   className="field num"
                   type="date"
                   value={form.splitDate}
-                  min={form.from}
-                  max={form.to}
                   onChange={(e) => update((f) => ({ ...f, splitDate: e.target.value }))}
                 />
               </Field>
@@ -343,41 +307,46 @@ export function Lab({ symbol }: { symbol: string | null }) {
           {strategy ? <p className="m-0 max-w-[110ch] text-[13px] text-ink-2">{strategy.summary}</p> : null}
 
           {history ? (
-            <p className="note m-0 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>
-                Stored {history.timeframe} history: {history.first.slice(0, 10)} to {history.last.slice(0, 10)},{" "}
-                {history.bars.toLocaleString("en-US")} bars.
-              </span>
-              {period && (form.from !== period.from || form.to !== period.to) ? (
-                <button type="button" className="btn" onClick={() => update((f) => ({ ...f, from: period.from, to: period.to }))}>
-                  Use all of it
-                </button>
+            <div className="flex flex-col gap-1.5">
+              <p className="note m-0 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span>
+                  Stored {history.timeframe} history: {history.first.slice(0, 10)} to {history.last.slice(0, 10)},{" "}
+                  {history.bars.toLocaleString("en-US")} bars.
+                </span>
+                {period && (form.from !== period.from || form.to !== period.to) ? (
+                  <button type="button" className="btn" onClick={() => update((f) => ({ ...f, from: period.from, to: period.to }))}>
+                    Use all of it
+                  </button>
+                ) : null}
+                <DownloadButtons history={minutes} missing={missing} download={download} />
+                <DownloadNote download={download} />
+              </p>
+              {missing.length ? (
+                <p role="status" className="m-0 max-w-[110ch] text-[13px]" style={{ borderLeft: "3px solid var(--color-amber)", paddingLeft: 10 }}>
+                  The period chosen reaches outside the stored history. A run uses only the days that are stored: download the
+                  rest first, or run on what is there.
+                </p>
               ) : null}
-              <button
-                type="button"
-                className="btn"
-                disabled={downloading}
-                onClick={() => void download()}
-                title="Asks the provider for the one-minute bars since the last stored one"
-              >
-                Update to now
-              </button>
-              {downloadNote}
-            </p>
+            </div>
           ) : (
             <div role="alert" className="max-w-[110ch] text-[13px]" style={{ borderLeft: "3px solid var(--color-amber)", paddingLeft: 10 }}>
               <p className="m-0">
                 No {form.base} history of {info.symbol} is stored yet, so there is nothing to test on. A year of one-minute
                 bars is about 370,000 rows from the provider.
               </p>
-              <p className="m-0 mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <button type="button" className="btn btn-primary" disabled={downloading} onClick={() => void download()}>
-                  Download the last 12 months
+              <p className="m-0 mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={download.downloading}
+                  onClick={() => void download.start(downloadRange(minutes, Date.now()))}
+                >
+                  {minutes ? "Update the one-minute history" : "Download the last 12 months"}
                 </button>
                 <button type="button" className="btn" onClick={refresh}>
                   Check again
                 </button>
-                {downloadNote}
+                <DownloadNote download={download} />
               </p>
             </div>
           )}
