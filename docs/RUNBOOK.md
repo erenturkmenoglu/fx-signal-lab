@@ -239,6 +239,7 @@ application. Caddy then holds ports 80 and 443 of the server; the application st
 | `make domain`: "has no address yet" | No DNS `A` record for the name is visible. | Create it; a new record can take minutes to be seen. |
 | `make domain`: "points at ..., but this server's public address is ..." | The record points elsewhere, or the server got a new address after a stop and start. | Point the record at the address named; attach a static IP so that it stays. |
 | `make domain`: "did not answer within 240 seconds", with "Timeout during connect (likely firewall problem)" | Let's Encrypt cannot reach the server. | Open ports 80 and 443 (TCP) in the provider's firewall, then run the command again. |
+| `make domain`: "Caddy could not be started", with "address already in use" above it | Another program holds port 80 or 443. | `sudo ss -ltnp` shows which. If it is Tailscale Funnel or Serve: `sudo tailscale funnel reset`, then run the command again. |
 | A certificate warning in the browser | Caddy has no certificate for the name, or the name in the browser is not the one that is set. | `docker compose logs --tail 50 caddy`. Caddy keeps trying by itself, with growing pauses. |
 | The login says "this dashboard has a public address (DASHBOARD_DOMAIN) but no password" | A domain is in `.env` and the password line is gone. Nothing is served. | `make password`. |
 | The page does not load at all after a server restart | The server has a new address (no static IP), or Caddy is not running. | `make domain`, `docker compose ps`. |

@@ -48,7 +48,7 @@ may compress better or worse.
 | Database, while it compresses a day of ticks | 180 to 280 MB more, for a few seconds |
 | Application, while it recovers a gap | about 40 MB more per page of 50,000 quotes |
 | Docker itself | 170 to 185 MB |
-| Caddy, only with a domain of your own (5.4) | 45 MB after its start, 51 MB after 80 requests and a live stream, on the development machine. CI limits it to 100 MB |
+| Caddy, only with a domain of your own (5.4) | 15 MB in its container in CI after the checks of a push (limit there: 100 MB). As a bare process on the development machine: 45 MB after its start, 51 MB after 80 requests and a live stream. Its image is a 21 MB download |
 | Image build next to the running stack | about 375 MB at its peak (up to about 670 MB for the very first build, which also downloads the images) |
 | A backtest (a year of one-minute bars) | about 165 MB for 2 to 3 seconds, in a process of its own |
 | A signal board (81 methods on the same year) | about 210 MB for 8 seconds on the development machine, in a process of its own; a month: 115 MB for 2 seconds. Not yet timed on the server |
@@ -256,8 +256,8 @@ without one.
 5. **Turn it on.**
 
    ```bash
-   cd ~/fx-signal-lab && git pull
-   sudo make domain ARGS="--check signale.example"    # optional: the checks alone
+   cd ~/fx-signal-lab && git pull && docker compose up -d --build    # the current version first
+   sudo make domain ARGS="--check signale.example"                   # optional: the checks alone
    sudo make domain ARGS=signale.example
    ```
 
@@ -267,6 +267,10 @@ without one.
    with a valid certificate, usually within a minute. If that has not happened after
    four minutes it prints what Caddy reported and puts everything back as it was. Run it
    again when the reason is fixed.
+
+   For the check of the name the command asks two public services: which address the
+   server has (checkip.amazonaws.com, or icanhazip.com if that does not answer) and which
+   address the name has (dns.google). `--no-dns-check` in front of the name skips both.
 6. **One door.** Funnel keeps publishing the old address until it is told to stop:
    `sudo tailscale funnel reset`. Do that once the new address works.
 
@@ -291,7 +295,8 @@ Tested: the real Caddy in front of the real application on such a trial name, by
 with a browser and in CI (the redirect, the certificate, the login and its cookie, the
 live stream, compression, the refusals, turning it off). Not tested: a certificate from
 Let's Encrypt for a real name, the Lightsail console steps (they are from its
-documentation), and Funnel and Caddy running side by side.
+documentation), and Funnel and Caddy running side by side. Should Caddy not start
+because port 443 is taken, turn Funnel off first.
 
 ### 5.5 A work computer
 

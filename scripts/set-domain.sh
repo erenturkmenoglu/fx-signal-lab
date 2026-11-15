@@ -333,7 +333,9 @@ fi
 
 note "starting Caddy (the first time, its image is downloaded)"
 if ! $DOCKER compose up -d caddy; then
-  give_up "Caddy could not be started (the reason is above)."
+  note "If the reason above is 'address already in use', another program holds port 80 or 443"
+  note "('sudo ss -ltnp' shows which). Should it be Tailscale Funnel or Serve: sudo tailscale funnel reset"
+  give_up "Caddy could not be started."
 fi
 
 note "waiting for the certificate and for https://$name"
