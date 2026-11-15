@@ -404,13 +404,16 @@ the academic literature shaped the list and how to read the results:
   to the numbers": on noise a stop moves losses around and leaves the average where it was.
   A stop earns its keep only if losing moves tend to continue, which is the momentum
   question again.
-- **Channels, support and resistance on intraday FX.** Curcio, Goodhart, Guillaume and
-  Payne (1997, *International Journal of Finance & Economics* 2(4), 267-280;
-  [abstract](https://econpapers.repec.org/RePEc:ijf:ijfiec:v:2:y:1997:i:4:p:267-80)) took
-  the levels and trading ranges that technical analysts themselves supplied for the
-  intra-day foreign exchange market and traded their breaks. Some profit in periods of
-  trend, none on average, and less after transaction costs. That is the prior for the two
-  channel methods here, whose channel is in addition a fitted line, not an analyst's.
+- **Analysts' own levels on intraday FX.** Curcio, Goodhart, Guillaume and Payne (1997,
+  *International Journal of Finance & Economics* 2(4), 267-280;
+  [abstract](https://econpapers.repec.org/RePEc:ijf:ijfiec:v:2:y:1997:i:4:p:267-80)) traded
+  filter rules that technical analysts themselves had identified and supplied for the
+  intra-day foreign exchange market. Some profit in periods of trend, none on average, and
+  less after transaction costs. An earlier version of the work (Curcio and Goodhart 1992,
+  [LSE Financial Markets Group discussion paper 142](https://researchonline.lse.ac.uk/id/eprint/119184)),
+  on breaks of support and resistance levels supplied by chartists, had still found them
+  profitable. That is the prior for the two channel methods here, whose channel is in
+  addition a fitted line, not an analyst's.
 
 Not on the list, and why: Williams %R is the stochastic %K upside down; VWAP, on-balance
 volume and money flow need traded volume, which spot FX quotes do not have (the rule against
