@@ -21,7 +21,9 @@ import {
   storedPeriod,
 } from "./model";
 
-const STORAGE_KEY = "fxlab.lab.form.v1";
+// v2: the trading rules changed (one clip, a stop as near as the target); a form saved before that
+// would bring the old ladder back
+const STORAGE_KEY = "fxlab.lab.form.v2";
 
 function loadSaved(): unknown {
   try {

@@ -33,7 +33,7 @@ REQUEST = {
     "strategy": "bollinger_reversion",
     "start": "2026-10-05",
     "end": "2026-10-24",
-    "execution": {"min_potential_pips": 2, "target_pips": 3, "add_step_pips": 3, "stop_pips": 6},
+    "execution": {"min_potential_pips": 2, "target_pips": 3, "add_step_pips": 3, "stop_pips": 6, "max_clips": 5},
 }
 
 
@@ -119,7 +119,8 @@ async def test_what_is_stored_and_what_a_form_can_offer(engine: AsyncEngine, reg
     lab = await describe_lab(engine, registry, "EURUSD")
     assert [s["key"] for s in lab["strategies"]][:2] == ["rsi_reversion", "bollinger_reversion"]
     assert lab["execution"]["spread_pips"] == 1.0 and lab["execution"]["clip_units"] == 1_000_000
-    assert lab["execution"]["flat_time"] == "16:45" and lab["execution"]["max_clips"] == 5
+    assert lab["execution"]["flat_time"] == "16:45" and lab["execution"]["max_clips"] == 1
+    assert lab["execution"]["stop_pips"] == lab["execution"]["target_pips"] == 5.0
     assert (lab["symbol"], lab["currency"], lab["unit_currency"]) == ("EURUSD", "USD", "EUR")
     assert [h["timeframe"] for h in lab["history"]] == ["1m", "5m"]
     assert lab["timeframes"] == ["1m", "5m", "15m", "30m", "1h"]
@@ -284,7 +285,8 @@ def test_the_backtest_command(
     get_settings.cache_clear()
     bars = market()
     fill_database(migrated_database, registry, bars)
-    settings = ["-x", "min_potential_pips=2", "-x", "target_pips=3", "-x", "add_step_pips=3", "-x", "stop_pips=6"]
+    # the same rules as the request, typed the way an operator types them
+    settings = [part for name, value in REQUEST["execution"].items() for part in ("-x", f"{name}={value}")]
     expected = build_report(bars, registry.get("EURUSD"), BacktestRequest.from_mapping(REQUEST))
 
     # no dates: everything that is stored

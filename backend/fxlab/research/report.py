@@ -96,6 +96,12 @@ def default_execution(inst: Instrument) -> Execution:
         spread_pips=inst.costs.assumed_spread_pips,
         slippage_pips=inst.costs.slippage_pips,
         commission_per_million=inst.costs.commission_per_million,
+        clip_units=inst.rules.clip_units,
+        max_clips=inst.rules.max_clips,
+        add_step_pips=inst.rules.add_step_pips,
+        target_pips=inst.rules.target_pips,
+        stop_pips=inst.rules.stop_pips,
+        min_potential_pips=inst.rules.min_potential_pips,
         session_tz=inst.session.tz,
         day_end=inst.session.daily_rollover,
         # out of every position a quarter of an hour before the trading day ends

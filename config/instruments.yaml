@@ -42,6 +42,14 @@ defaults:
     slippage_pips: 0.1
     commission_per_million: 0.0
 
+  rules:                         # how signals are traded in backtests; a test can override them
+    clip_units: 1000000          # size of one order, in base currency
+    max_clips: 1                 # 1 = never add to a position that has gone against it
+    add_step_pips: 5             # only with more than one clip: the distance between clips
+    target_pips: 5               # profit target, after the spread
+    stop_pips: 5                 # stop, as near as the target: a loss is no larger than a win
+    min_potential_pips: 5        # a signal must see at least this much after the spread
+
   strategy_eligibility: [all]
 
 instruments:
@@ -56,6 +64,10 @@ instruments:
     # Owner's trading assumptions (15 Nov 2026): the venue quotes about 0.5 pips and charges no
     # commission; backtests assume 1.0 pip to stay on the safe side.  No extra slippage on top.
     costs: {assumed_spread_pips: 1.0, slippage_pips: 0.0, commission_per_million: 0.0}
+    # Owner's rules (15 Nov 2026, evening): 1 mn EUR per order; take the profit at 5 pips; no adding
+    # to a losing position any more ("paçallama"): the first rule set, five clips with the stop
+    # 30 pips away, won small and often and lost large; close a trade that does not work at once.
+    rules: {clip_units: 1000000, max_clips: 1, target_pips: 5, stop_pips: 5, min_potential_pips: 5}
 
   # --- planned pairs (inactive; provider support unverified) -------------------
   - symbol: GBPUSD

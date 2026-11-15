@@ -216,6 +216,9 @@ def _tally(
     out: dict[str, Any] = {
         **part(np.ones(len(pnl), dtype=bool)),
         "profit_factor": round(profit / loss, 3) if loss > 0 else None,
+        # a win and a loss of the usual size, side by side: small wins next to large losses show here
+        "average_win": round(profit / int(won.sum()), 2) if won.any() else None,
+        "average_loss": round(-loss / int(lost.sum()), 2) if lost.any() else None,
         "largest_loss": round(float(pnl.min()), 2) if lost.any() else None,
         "max_drawdown": round(drawdown, 2),
         "max_units": max((t.units for t in trades), default=0.0),

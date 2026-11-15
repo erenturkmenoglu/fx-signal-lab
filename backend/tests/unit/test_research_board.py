@@ -18,7 +18,7 @@ from tests.conftest import utc_ms
 from tests.unit.test_research_report import market
 
 #: looser rules than the defaults, so that the short test market produces enough trades
-RULES = {"min_potential_pips": 2, "target_pips": 3, "add_step_pips": 3, "stop_pips": 6}
+RULES = {"min_potential_pips": 2, "target_pips": 3, "add_step_pips": 3, "stop_pips": 6, "max_clips": 5}
 
 
 @pytest.fixture(scope="module")
@@ -128,6 +128,10 @@ def test_the_two_parts_of_the_period_add_up_and_days_add_up(result: dict) -> Non
         for name in result["variants"]:
             got = combo[name]
             assert got["in_sample"]["trades"] + got["out_of_sample"]["trades"] == got["trades"]
+            if got["wins"] and got["losses"]:  # what is won and lost on average adds up to the net result
+                total = got["wins"] * got["average_win"] + got["losses"] * got["average_loss"]
+                assert total == pytest.approx(got["net"], abs=0.01 * got["trades"])
+                assert got["average_win"] > 0 > got["average_loss"] >= got["largest_loss"]
             assert got["in_sample"]["net"] + got["out_of_sample"]["net"] == pytest.approx(got["net"], abs=0.02)
             assert sum(got["daily"]["trades"]) == got["trades"] and sum(got["daily"]["wins"]) == got["wins"]
             assert sum(got["daily"]["losses"]) == got["losses"]

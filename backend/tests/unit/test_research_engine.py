@@ -21,7 +21,18 @@ from tests.conftest import T0, utc_ms
 
 PIP = 0.0001
 #: spread 1 pip, 5 pip target, 10 pip stop, clips 5 pips apart, no delay, no cooldown
-EX = Execution(reaction_delay_s=0, cooldown_minutes=0, entry_start_utc="00:00", entry_end_utc="23:59")
+# the ladder the examples below are written for: up to five clips five pips apart, the stop ten pips
+# beyond the last of them.  (Not the default any more: by default a position is one clip.)
+EX = Execution(
+    max_clips=5,
+    add_step_pips=5.0,
+    target_pips=5.0,
+    stop_pips=10.0,
+    reaction_delay_s=0,
+    cooldown_minutes=0,
+    entry_start_utc="00:00",
+    entry_end_utc="23:59",
+)
 ONE = replace(EX, max_clips=1)
 
 

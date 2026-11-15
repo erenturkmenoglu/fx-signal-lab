@@ -12,6 +12,8 @@ export interface Part {
 
 export interface Tally extends Part {
   profit_factor: number | null;
+  average_win: number | null;
+  average_loss: number | null;
   largest_loss: number | null;
   max_drawdown: number;
   max_units: number;

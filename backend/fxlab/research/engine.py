@@ -65,17 +65,22 @@ def clock_ms(value: str) -> int:
 
 @dataclass(frozen=True)
 class Execution:
-    """How signals are traded.  The defaults are the assumptions agreed on 15 November 2026."""
+    """How signals are traded.
+
+    The defaults are the owner's rules of 15 November 2026: one clip per position (no adding
+    to a position that has gone against it), and a stop as near as the target.  The rules
+    of an instrument come from its configuration (``rules`` in config/instruments.yaml).
+    """
 
     pip_size: float = 0.0001
     spread_pips: float = 1.0  # the venue's typical spread is 0.5; 1.0 is the cautious figure
     slippage_pips: float = 0.0  # on stops and on timed exits (market orders)
     commission_per_million: float = 0.0  # quote currency per 1,000,000 of base currency, per side
     clip_units: float = 1_000_000.0
-    max_clips: int = 5  # 1 = never add to a position
-    add_step_pips: float = 5.0
+    max_clips: int = 1  # 1 = never add to a position
+    add_step_pips: float = 5.0  # with more than one clip: the distance between them
     target_pips: float = 5.0
-    stop_pips: float = 10.0
+    stop_pips: float = 5.0  # beyond the last clip that could be added; with one clip: beyond the entry
     min_potential_pips: float = 5.0  # a signal that sees less than this after the spread is not taken
     reaction_delay_s: float = 5.0
     max_wait_s: float = 120.0  # no bar this long after the planned fill: the signal is dropped

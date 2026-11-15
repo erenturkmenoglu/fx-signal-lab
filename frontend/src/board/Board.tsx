@@ -150,6 +150,12 @@ function Scoreboard({
               <th className="r" title="Trades that closed with a loss">
                 Failed
               </th>
+              <th className="r" title="What a trade that worked made on average">
+                Avg win
+              </th>
+              <th className="r" title="What a trade that failed lost on average. Small wins next to large losses show here.">
+                Avg loss
+              </th>
               <th className="r">Trades</th>
               <th className="r" title="Share of the trades that made money. Never judge a method by this alone.">
                 Share
@@ -196,6 +202,8 @@ function Scoreboard({
                   <td className="r num">{tally.trades ? <Result value={tally.net} /> : <span className="text-ink-3">no trade</span>}</td>
                   <td className="r num">{tally.trades ? tally.wins.toLocaleString("en-US") : ""}</td>
                   <td className="r num">{tally.trades ? tally.losses.toLocaleString("en-US") : ""}</td>
+                  <td className="r num">{tally.average_win == null ? "" : signedMoney(tally.average_win)}</td>
+                  <td className="r num">{tally.average_loss == null ? "" : signedMoney(tally.average_loss)}</td>
                   <td className="r num">{tally.trades.toLocaleString("en-US")}</td>
                   <td className="r num">{tally.trades ? percent(worked) : ""}</td>
                   {split ? (
@@ -644,10 +652,12 @@ export function Board({ symbol }: { symbol: string | null }) {
               Run finished {dateTimeUTC(result.finished_ms)} UTC.
             </p>
             <p className="note m-0 mt-1">
-              Every method is traded by the same rules: clips of {units(ex.clip_units)} {data.unit_currency}, at most{" "}
-              {ex.max_clips}, one more every {ex.add_step_pips} pips against; target {ex.target_pips} and stop {ex.stop_pips}{" "}
-              pips; spread {ex.spread_pips}; a signal needs {ex.min_potential_pips} pips of potential. Other rules and other
-              parameters: the strategy lab.
+              Every method is traded by the same rules:{" "}
+              {ex.max_clips > 1
+                ? `clips of ${units(ex.clip_units)} ${data.unit_currency}, at most ${ex.max_clips}, one more every ${ex.add_step_pips} pips against`
+                : `one order of ${units(ex.clip_units)} ${data.unit_currency} per position, nothing added to it`}
+              ; target {ex.target_pips} and stop {ex.stop_pips} pips; spread {ex.spread_pips}; a signal needs{" "}
+              {ex.min_potential_pips} pips of potential. Other rules and other parameters: the strategy lab.
             </p>
           </div>
 

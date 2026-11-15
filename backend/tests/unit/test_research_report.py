@@ -212,7 +212,8 @@ def request(**changes: object) -> BacktestRequest:
         "strategy": "bollinger_reversion",
         "start": "2026-10-05",
         "end": "2026-10-24",
-        "execution": {"min_potential_pips": 2, "target_pips": 3, "add_step_pips": 3, "stop_pips": 6},
+        # a ladder of up to five clips, so that what adding does is part of what is tested
+        "execution": {"min_potential_pips": 2, "target_pips": 3, "add_step_pips": 3, "stop_pips": 6, "max_clips": 5},
     }
     values.update(changes)
     return BacktestRequest.from_mapping(values)
@@ -221,15 +222,18 @@ def request(**changes: object) -> BacktestRequest:
 def test_the_assumptions_come_from_the_instrument(eurusd) -> None:  # type: ignore[no-untyped-def]
     ex = default_execution(eurusd)
     # what was agreed for EUR/USD: a spread of 1.0 pip (the venue quotes about 0.5), no commission,
-    # clips of 1 mn, at most 5, 5 pips apart, target 5 pips, at least 5 pips of potential
+    # orders of 1 mn, a target of 5 pips, at least 5 pips of potential ...
     assert (ex.pip_size, ex.spread_pips, ex.commission_per_million) == (0.0001, 1.0, 0.0)
-    assert (ex.clip_units, ex.max_clips, ex.add_step_pips, ex.target_pips, ex.min_potential_pips) == (
-        1e6,
-        5,
-        5.0,
-        5.0,
-        5.0,
+    assert (ex.clip_units, ex.target_pips, ex.min_potential_pips) == (1e6, 5.0, 5.0)
+    # ... and, since the evening of 15 November 2026, no adding to a position and a stop as near as the target
+    assert (ex.max_clips, ex.stop_pips) == (1, 5.0)
+    assert ex.stop_pips <= ex.target_pips  # a trade that fails must not cost more than one that works brings
+    # the rules are the instrument's: another pair, or another decision, is a line in its configuration
+    laddered = eurusd.model_copy(
+        update={"rules": eurusd.rules.model_copy(update={"max_clips": 3, "stop_pips": 8.0, "clip_units": 500_000.0})}
     )
+    other = default_execution(laddered)
+    assert (other.max_clips, other.stop_pips, other.clip_units, other.target_pips) == (3, 8.0, 500_000.0, 5.0)
     assert (ex.session_tz, ex.day_end, ex.flat_time) == ("America/New_York", "17:00", "16:45")
     changed = resolve_execution(eurusd, {"spread_pips": "0.5", "max_clips": 1})
     assert (changed.spread_pips, changed.max_clips, changed.target_pips) == (0.5, 1, 5.0)

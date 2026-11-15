@@ -191,7 +191,11 @@ jobs:
           r = json.load(open('backtest.json'))
           assert r['data']['price_basis'] == 'bid' and r['data']['base_bars'] == 28620, r['data']
           assert r['summary']['trades'] > 10 and r['signals']['signals'] > 50, (r['summary']['trades'], r['signals'])
-          assert 'in_sample' in r and 'out_of_sample' in r and 'without_adding' in r, sorted(r)
+          assert 'in_sample' in r and 'out_of_sample' in r, sorted(r)
+          # the rules of the instrument: one order per position, a stop as near as the target
+          ex = r['request']['execution']
+          assert (ex['max_clips'], ex['stop_pips'], ex['target_pips']) == (1, 5.0, 5.0), ex
+          assert r['summary']['max_units'] == 1000000 and 'without_adding' not in r, r['summary']['max_units']
           assert all(t['entry_price'] < 2 for t in r['trades']), 'a price that is not from the provider bars'
           print('ok:', r['summary']['trades'], 'trades on', r['data']['trading_days'], 'days')"
           # nothing stored for an instrument: the command says what to download and fails
@@ -258,7 +262,10 @@ jobs:
           assert len(board['days']) == 15 and board['days'][0] == '2026-10-12', board['days']
           assert board['data']['run_in_from'] is not None and board['data']['run_in_from'] < '2026-10-12', board['data']
           assert any(c['family'] == 'benchmark' for c in board['combos'])
-          assert sum(c['all']['trades'] for c in board['combos']) > 200
+          rules = board['variants'][0]  # 'one': a position is one order (the instrument's rules)
+          assert board['variants'] == ['one'] and board['request']['execution']['max_clips'] == 1, board['variants']
+          assert sum(c[rules]['trades'] for c in board['combos']) > 200
+          assert all(c[rules]['largest_loss'] is None or c[rules]['largest_loss'] >= -1500 for c in board['combos'])
           # the trades of the window are the trades the board counts for those days
           spans = board['day_spans'][-5:]
           def day(ms):
@@ -268,9 +275,9 @@ jobs:
               for s in window['signals']:
                   if s['method'] == combo['id'] and 'pnl' in s:
                       got[day(s['exit_ms'])] += 1
-              assert got == combo['all']['daily']['trades'][-5:], (combo['id'], got, combo['all']['daily']['trades'][-5:])
+              assert got == combo[rules]['daily']['trades'][-5:], (combo['id'], got, combo[rules]['daily']['trades'][-5:])
           assert len(window['bars']['t']) > 1000 and len(window['methods']) == len(board['combos'])
-          print('ok:', len(board['combos']), 'methods,', sum(c['all']['trades'] for c in board['combos']), 'trades,',
+          print('ok:', len(board['combos']), 'methods,', sum(c[rules]['trades'] for c in board['combos']), 'trades,',
                 len(window['signals']), 'signals in the last week')"
           # a second run cannot be started with a broken request, and the feed is still streaming
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \

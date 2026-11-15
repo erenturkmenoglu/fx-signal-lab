@@ -38,6 +38,8 @@ function tally(pnl: number[], trades: number[], wins: number[]): Tally {
   return {
     ...part(0, 4),
     profit_factor: null,
+    average_win: null,
+    average_loss: null,
     largest_loss: null,
     max_drawdown: 0,
     max_units: 1_000_000,

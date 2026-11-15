@@ -21,7 +21,7 @@ sudo make strategies
 sudo make backtest ARGS="--strategy rsi_reversion --days 10"
 
 # change a strategy parameter (-p) or a trading assumption (-x)
-sudo make backtest ARGS="--strategy rsi_reversion -p rsi_period=9 -p oversold=25 -x max_clips=1"
+sudo make backtest ARGS="--strategy rsi_reversion -p rsi_period=9 -p oversold=25 -x stop_pips=8"
 sudo make backtest ARGS="--strategy session_breakout -p session=london --timeframe 15m --trades 20"
 ```
 
@@ -80,9 +80,11 @@ desktop ran. A year of minute bars takes about ten seconds.
 Three things on that page are there because a board invites a particular mistake:
 
 1. **The best of 71 looks good by chance.** On prices that are pure noise, a month of this
-   board showed about half of the methods above zero and the best one at +18 000 USD. That
-   is the adding rule at work (many small wins, the rare large loss not yet arrived), not
-   skill. Read the later-days column and the one-clip switch before believing a line.
+   board shows 10 of the 66 real methods above zero and the best one at about +2 000 USD;
+   over a quarter one is left, over a year none. (With the first rule set, which added to
+   positions, the same month showed half of them above zero and the best at +18 000: many
+   small wins, the rare large loss not yet arrived.) Read the later-days column and a
+   longer period before believing a line.
 2. **The best method of a day is hindsight.** Under the day table the page tries the obvious
    use of it: each day trade the method that was best the day before. If that does no better
    than any method on any day, the table shows luck moving around.
@@ -104,10 +106,14 @@ last board is also kept by the server, so it is there again after a reload.
 | Bars the trades are simulated on | `--base` (default 1m). Finer bars decide more exactly what happened first. |
 | Costs | spread, slippage and commission from `config/instruments.yaml`, changeable per run. |
 
-For EUR/USD the assumptions agreed on 15 November 2026 are: the trading venue quotes about
+For EUR/USD the owner's assumptions of 15 November 2026 are: the trading venue quotes about
 0.5 pips and charges no commission; tests assume a **1.0 pip** spread to stay on the safe
-side; a signal is only taken when it sees **at least 5 pips** of profit after that spread; a
-clip is **1 mn EUR**; a position may be built up to **5 clips**.
+side; a signal is only taken when it sees **at least 5 pips** of profit after that spread; an
+order is **1 mn EUR**; the profit is taken at **5 pips** and a trade that goes **5 pips**
+the other way is closed. A position is **one order**: nothing is added to it. (The first rule
+set of that day allowed up to five clips, added as the price went against the position. What
+that did to the results is the section "What adding to a position does to the numbers".)
+These rules are the `rules` of the instrument in `config/instruments.yaml`.
 
 ## How a trade is simulated
 
@@ -147,8 +153,10 @@ Every rule errs against the strategy when the data cannot decide.
    - a bar that opens beyond the stop is closed at its open, however far that is;
    - a target is filled at its level, never better.
 
-With the default settings a long position looks like this (prices relative to the first
-clip, in pips; one pip on one clip is 100 USD):
+With one clip (the default) a trade ends 5 pips up or 5 pips down, 500 USD either way. With
+a ladder of five clips five pips apart and the stop ten pips beyond the last of them (the
+first rule set, `-x max_clips=5 -x stop_pips=10`) a long position looks like this (prices
+relative to the first clip, in pips; one pip on one clip is 100 USD):
 
 | clips | bought at | average | target (bid) | profit at target | loss at the stop (-30) |
 |---|---|---|---|---|---|
@@ -170,10 +178,10 @@ been bought.
 | `commission_per_million` | 0 | quote currency per 1 mn base, per side |
 | `min_potential_pips` | 5 | a signal must see at least this much after the spread |
 | `clip_units` | 1 000 000 | size of one clip in base currency |
-| `max_clips` | 5 | 1 = never add to a position |
-| `add_step_pips` | 5 | distance between clips |
+| `max_clips` | 1 | 1 = never add to a position |
+| `add_step_pips` | 5 | distance between clips (only with more than one) |
 | `target_pips` | 5 | profit target from the average entry |
-| `stop_pips` | 10 | stop beyond the last possible clip |
+| `stop_pips` | 5 | stop beyond the last possible clip; with one clip: beyond the entry |
 | `max_hold_minutes` | 240 | longest time in a position |
 | `cooldown_minutes` | 5 | pause after a position is closed |
 | `reaction_delay_s` | 5 | time between the signal and the order |
@@ -272,7 +280,8 @@ example of the layout, nothing else.)
   check. Every time a parameter is changed after looking at the out-of-sample column, that
   column becomes a little more in-sample. A result that exists only in-sample is a result of
   the choosing.
-- **No adding.** The same signals traded with one clip. Adding to losing positions raises the
+- **No adding** (shown when a run allows more than one clip). The same signals traded with
+  one clip. Adding to losing positions raises the
   share of winning trades and makes the rare loss several times larger; this column shows how
   much of a result is the signals and how much is the adding.
 - **Do not judge by the share of winning trades.** Read profit factor (money won per unit of
@@ -289,12 +298,38 @@ table, the running total.
 
 ## What adding to a position does to the numbers
 
-With the defaults, a full ladder that works makes 2 500 USD and one that fails loses 10 000.
-Four full winners pay for one full loser; the position needs to come back more than four
-times out of five *from 20 pips under water* just to break even. Markets that trend for a day
-produce exactly the loser. The backtest takes the stop seriously (it is always filled, at
-the stop or worse) so that this shows in the numbers; a ladder without a stop has no largest
-loss to show, which is not the same as not having one.
+The first rule set bought more as the price fell: up to five clips, the profit taken 5 pips
+above the average entry, the stop 10 pips below the last clip. Its results looked a
+particular way, which the owner noticed on the first real look: the trades that worked made
+a little, the trades that failed lost a lot. That is not something the market did. It is
+what those rules do on any prices:
+
+- a trade that works makes 500 USD (one clip) to 2 500 USD (five clips);
+- a trade that reaches the stop has bought all five clips by then and loses 10 000 USD;
+- so one stop wipes out twenty one-clip wins, and the position has to come back more than
+  four times out of five *from 20 pips under water* just to break even. A market that
+  starts to trend (a rate decision, a political surprise: a new story) produces exactly
+  the loser, and the rule keeps buying into it.
+
+Measured on a year of prices that are pure noise (a random walk; not market data), all
+methods together:
+
+| rules | trades that worked | average win | average loss | largest loss | per trade |
+|---|---|---|---|---|---|
+| five clips, stop 10 beyond the last | 75.7% | +779 | -3 666 | -10 000 | -295 |
+| one clip, stop 10 | 57.6% | +490 | -907 | -1 000 | -101 |
+| **one clip, stop 5 (the rules now)** | 39.9% | +494 | -494 | -500 | -100 |
+| one clip, target 10, stop 5 | 28.5% | +900 | -492 | -500 | -95 |
+
+Two things to read from it. Adding bought a high share of winning trades with a tail of
+large losses and three times the cost per trade. And a stop does not change what a trade
+is worth on average: on noise every one-clip line loses the spread, 100 USD, whatever the
+stop and the target. A nearer stop makes losses small and frequent instead of large and
+rare. What can change the average is the entry: taking fewer of the trades that fail,
+which is why the reasons for failing are worth measuring.
+
+With the stop as near as the target a method has to be right more than half the time after
+the spread. On noise it is right four times in ten.
 
 ## How the engine itself is tested
 

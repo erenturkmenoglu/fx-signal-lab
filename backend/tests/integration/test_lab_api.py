@@ -58,7 +58,7 @@ async def test_the_lab_describes_what_can_be_tested(lab: tuple[AppServer, Bars])
             "choices": [],
             "help": "",
         }
-        assert described["execution"]["spread_pips"] == 1.0 and described["execution"]["max_clips"] == 5
+        assert described["execution"]["spread_pips"] == 1.0 and described["execution"]["max_clips"] == 1
         assert [(h["timeframe"], h["bars"]) for h in described["history"]] == [("1m", len(bars))]
         assert (await http.get("/api/lab?symbol=eurusd")).json()["symbol"] == "EURUSD"
         unknown = await http.get("/api/lab?symbol=XAUUSD")

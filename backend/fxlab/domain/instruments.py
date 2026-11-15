@@ -86,6 +86,22 @@ class CostConfig(_Model):
     commission_per_million: float = Field(0.0, ge=0, description="per 1M base-currency notional, per side")
 
 
+class TradingRules(_Model):
+    """How signals are traded in research and backtests: the owner's rules, changeable per test.
+
+    One clip per position by default.  Adding to a position that has gone against it
+    (``max_clips`` above 1) raises the share of winning trades and makes the rare loss several
+    times larger; it was the first rule tried and was dropped on 15 November 2026.
+    """
+
+    clip_units: float = Field(1_000_000.0, gt=0, description="size of one order, in base currency")
+    max_clips: int = Field(1, ge=1, description="1 = never add to a position")
+    add_step_pips: float = Field(5.0, gt=0, description="with more than one clip: the distance between clips")
+    target_pips: float = Field(5.0, gt=0, description="profit target from the average entry, after the spread")
+    stop_pips: float = Field(5.0, gt=0, description="stop beyond the last clip that could be added")
+    min_potential_pips: float = Field(5.0, ge=0, description="a signal must see this much after the spread")
+
+
 class ProviderSymbols(_Model):
     """Optional overrides when a provider does not follow the default symbol pattern."""
 
@@ -105,6 +121,7 @@ class Instrument(_Model):
     session: SessionConfig = SessionConfig()
     data_quality: DataQualityConfig = DataQualityConfig()
     costs: CostConfig = CostConfig()
+    rules: TradingRules = TradingRules()
     strategy_eligibility: list[str] = Field(default_factory=lambda: ["all"])
     history_start: str | None = Field(None, description="earliest date with usable history, if known")
     provider_symbols: ProviderSymbols = ProviderSymbols()

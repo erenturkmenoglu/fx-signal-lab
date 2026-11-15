@@ -57,6 +57,12 @@ larger: at 5 million EUR one pip is 500 USD. So every result with adding is show
 to the same strategy without it, with the largest position and the largest loss, and
 the whole position always has a stop.
 
+Changed by the owner the same evening, after the first look at results (small wins, large
+losses): **no adding any more.** A position is one order of 1 million EUR, the profit is
+taken at 5 pips and a trade that goes 5 pips the other way is closed at once. These are
+the `rules` of the instrument in `config/instruments.yaml`; a ladder can still be tested
+by setting `max_clips` for a run ([BACKTEST.md](BACKTEST.md) has the numbers on both).
+
 ## Phase 1: foundation and data infrastructure (done, pending live verification)
 
 Delivered; see [PHASE1_REPORT.md](PHASE1_REPORT.md). Since 15 November 2026 the
