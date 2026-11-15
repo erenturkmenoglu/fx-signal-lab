@@ -33,10 +33,29 @@ region. Any provider with a US east coast region does the same job.
 4 GB is for the image build and for TimescaleDB with room to spare. 2 GB probably works
 and has not been tried.
 
+### If your AWS account is new
+
+Accounts created with AWS's simplified sign-up work in one Region, which AWS picks (for
+example Stockholm), and the console has no Region selector. Another Region needs
+"advanced AWS features": a change that cannot be reversed, turns the account into an
+AWS Organization and removes its spend limits for good. That is not worth it here.
+
+Stay in the Region you are offered. A server in Europe receives the feed roughly 50 ms
+later than one in Virginia, and it is about as much closer to a phone in Europe, so what
+you see arrives at nearly the same time. For manual trading over seconds to minutes
+that difference is small next to your own reaction time. If you want the US east coast
+without that step, use a provider that lets you pick the region when you create the
+server.
+
+On AWS's free plan the account closes when the sign-up credit is used up or after six
+months, and the server stops with it. Upgrade to the paid plan before that (AWS
+Settings, Billing, Upgrade); unused credit still counts.
+
 ## 1. Create the server (Lightsail)
 
 1. Sign in at <https://lightsail.aws.amazon.com> and choose **Create instance**.
-2. Region: **Virginia (us-east-1)**.
+2. Region: **Virginia (us-east-1)** if your account lets you choose, otherwise the
+   Region you are offered (see "If your AWS account is new").
 3. Platform: **Linux/Unix**. Blueprint: **OS Only**, then **Ubuntu 24.04 LTS**.
 4. Plan: **$24** (4 GB memory, 2 vCPUs, 80 GB SSD).
 5. Give it a name and create it. When it is running, open **Connect using SSH**: a
@@ -168,5 +187,7 @@ automatically.
 
 * [Where are Massive's servers located?](https://massive.com/knowledge-base/article/where-are-massives-servers-located)
 * [Amazon Lightsail pricing](https://aws.amazon.com/lightsail/pricing)
+* [AWS: activate advanced AWS features](https://docs.aws.amazon.com/accounts/latest/reference/activate-advanced-features.html)
+* [AWS: choosing a Free Tier plan](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html)
 * [Tailscale: host a private web server with Docker](https://tailscale.com/docs/solutions/host-private-server-docker)
 * [Tailscale pricing](https://tailscale.com/pricing/)
