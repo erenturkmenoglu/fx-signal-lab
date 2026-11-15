@@ -17,7 +17,7 @@ A small cloud server, not a home PC.
 |---|---|---|
 | Always on | yes | only while it never sleeps, updates or loses power or internet |
 | Distance to Massive | same coast: a few milliseconds | from Europe: on the order of 100 to 150 ms round trip |
-| Reachable from your phone | yes, see step 5 | the same way, but only while the PC is up |
+| Reachable from your phone or any browser | yes, see step 5 | the same way, but only while the PC is up |
 | Cost | about $12 a month | electricity |
 | Effort | about 15 minutes, once | Docker Desktop, power settings, router quirks |
 
@@ -166,36 +166,69 @@ prints what is equal and what differs. It only reads, so the feed is not interru
 (`make verify` can be repeated too, but it stops the application for about half a
 minute; the gap is recovered afterwards.)
 
-## 5. The dashboard on your phone
+## 5. The dashboard on your phone and in any browser
 
-The dashboard has no login of its own, so it must not be put on the public internet.
-Tailscale gives your devices a private network instead: only devices signed in to your
-account can open the dashboard, and no port is opened to anyone else. The personal plan
-is free.
+Two steps: a password, then an address.
 
-On the server:
+### 5.1 A password
+
+```bash
+sudo make password
+```
+
+It asks for the password twice (hidden, at least 12 characters), stores only a hash of
+it in `.env` and restarts the application. From then on the dashboard, its API and the
+live stream need a login; a browser stays signed in for 30 days. Running it again
+changes the password and signs every browser out. `sudo make password ARGS=--remove`
+turns the login off again.
+
+**Without a password the dashboard must not get a public address.** It shows the data
+and can start downloads.
+
+### 5.2 A public address without a domain
+
+Tailscale Funnel gives the server an address like
+`https://<server-name>.<your-network>.ts.net`. It opens in any browser, with a valid
+certificate, without opening a port on the server and without installing anything on
+the phone or PC. Tailscale's personal plan is free. Funnel is in beta and its bandwidth
+is limited, which does not matter for a dashboard.
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
-sudo tailscale serve --bg 8000
+sudo tailscale funnel --bg 8000
 ```
 
 * `tailscale up` prints a link. Open it and sign in with a Google, Apple, Microsoft or
   GitHub account.
-* The first `tailscale serve` prints a link that turns on HTTPS for your network. Open
-  it, confirm, and run the command again. It then prints the address of the dashboard:
-  `https://<server-name>.<your-network>.ts.net/`. `--bg` keeps it running across
-  restarts.
+* The first `tailscale funnel` prints a link that turns on HTTPS and Funnel for your
+  network. Open it, confirm, and run the command again. It then prints the address.
+  `--bg` keeps it published across restarts.
 * In the Tailscale admin console, under Machines, open the server's menu and choose
-  **Disable key expiry**. Otherwise the server drops out of the network after about six
-  months.
+  **Disable key expiry**. Otherwise the server drops out after about six months.
+* `sudo tailscale funnel status` shows what is published. `sudo tailscale funnel reset`
+  takes it off the internet again.
 
-On the phone: install the Tailscale app, sign in with the same account, leave it
-connected, and open the address in the browser. "Add to Home Screen" makes it behave
-like an app.
+On the phone, "Add to Home Screen" makes the page behave like an app.
 
-Use your own phone on mobile data. An office network may block Tailscale.
+The author has no Tailscale account in the build environment: these commands are from
+Tailscale's documentation and were not run. The login itself was tested in a real
+browser against the running application.
+
+### 5.3 Private instead of public
+
+`sudo tailscale serve --bg 8000` instead of `funnel` publishes the same address only to
+devices that run the Tailscale app and are signed in to your account. That is the more
+private choice if every device you use can run the app. One port is either private or
+public: the last of the two commands wins.
+
+### 5.4 A work computer
+
+Company networks often block addresses they do not know, and a `ts.net` address may be
+one of them. If it does not open there, the next step is a domain of your own (about
+$11 a year for a .com) pointing at the server, with a reverse proxy for HTTPS; that is
+not set up in this repository yet. Check your employer's rules for personal trading
+tools and for what a work device may be used for.
 
 ## 6. First look
 
@@ -246,4 +279,5 @@ automatically.
 * [AWS: activate advanced AWS features](https://docs.aws.amazon.com/accounts/latest/reference/activate-advanced-features.html)
 * [AWS: choosing a Free Tier plan](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html)
 * [Tailscale: host a private web server with Docker](https://tailscale.com/docs/solutions/host-private-server-docker)
+* [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) and the [`tailscale funnel` command](https://tailscale.com/docs/reference/tailscale-cli/funnel)
 * [Tailscale pricing](https://tailscale.com/pricing/)

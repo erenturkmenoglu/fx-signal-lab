@@ -4,6 +4,49 @@ Phases follow the project specification. Each phase ends with the same report as
 Phase 1 (features, files, tests, limitations, risks, run instructions, next step) and
 is built on the previous one without restructuring it.
 
+## Working order since 15 November 2026: a usable product first
+
+Proposed by the owner after Phase 1: stop refining the infrastructure and get to
+strategy research. The phases below remain the full scope. The order of work is now a
+thin slice through Phases 2 to 4, and the rest afterwards.
+
+1. **Access** (done): a password login and an address that opens in any browser
+   ([DEPLOY.md](DEPLOY.md), step 5).
+2. **Backtest engine:** the first strategies of the specification (RSI reversion,
+   Bollinger reversion, EMA momentum, session breakout), each with entries, exits,
+   stop-loss and take-profit. Spread, slippage and a reaction delay are parameters.
+   Positions are opened and closed within the day; the result is the daily profit and
+   loss for a chosen capital. No future information; when stop and target fall into the
+   same bar, the worse outcome counts. Only the indicators these strategies need.
+3. **Strategy lab screen:** strategy and parameters; the chart with entry, exit, stop
+   and target marks; equity curve, daily profit and loss, trade list. In-sample and
+   out-of-sample results are shown apart.
+4. **Live signals** from the strategy that survives, running the same code as the
+   backtest.
+
+Deferred until that works end to end: the wide indicator library, regime detection,
+the ensemble and multi-timeframe strategies, notifications, the paper-trading journal,
+more pairs, production hardening. The live feed keeps collecting in the background.
+
+What the backtests have to respect (details in
+[MASSIVE_API_NOTES.md](MASSIVE_API_NOTES.md)): Massive's historical bars are bid-only,
+so the ask side needs a spread model; quotes are stamped in whole seconds and arrive
+once or twice a second; orders are placed by hand, seconds after a signal.
+
+Assumptions for the backtests, given by the owner on 15 November 2026:
+
+* **Costs.** The venue's typical EUR/USD spread is 0.5 pips, with no commission. The
+  backtests assume 1.0 pip, to stay on the safe side.
+* **Minimum edge.** A signal is only given when it sees at least 5 pips of profit.
+* **Size.** 1 million EUR per order; more than one order can be open at a time. When
+  the price moves against a position, further orders of 1 million may be added down to
+  an upper limit, for example 5 million EUR, which lowers the average entry price.
+
+Adding to a losing position raises the share of winning trades and makes the rare loss
+larger: at 5 million EUR one pip is 500 USD. So every result with adding is shown next
+to the same strategy without it, with the largest position and the largest loss, and
+the whole position always has a stop.
+
 ## Phase 1: foundation and data infrastructure (done, pending live verification)
 
 Delivered; see [PHASE1_REPORT.md](PHASE1_REPORT.md). Since 15 November 2026 the

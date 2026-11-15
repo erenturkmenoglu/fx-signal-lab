@@ -1,3 +1,4 @@
+import { notifyUnauthorized } from "./auth";
 import type { Bar, ConnEvent, Gap, Job, Obs, SystemStatus } from "./types";
 
 export class ApiError extends Error {
@@ -11,6 +12,7 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
+  if (response.status === 401) notifyUnauthorized(); // the session ended: back to the login form
   if (!response.ok) {
     let detail = response.statusText;
     try {

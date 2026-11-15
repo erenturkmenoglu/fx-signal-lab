@@ -66,11 +66,18 @@ async def health_ready(request: Request) -> JSONResponse:
     problems: list[str] = []
     if error:
         problems.append(error)
+    auth = getattr(request.app.state, "auth", None)
+    if auth is not None and auth.problem:
+        problems.append(auth.problem)
     if service is None or not service.started:
         problems.append("ingestion service not started")
     elif service.writer.db_ok is False:
         problems.append(f"database writes failing: {service.writer.last_error}")
-    return JSONResponse({"ready": not problems, "problems": problems}, status_code=200 if not problems else 503)
+    status_code = 200 if not problems else 503
+    if problems and auth is not None and auth.enabled and not auth.authenticated(request):
+        # this endpoint is open (health checks); error texts are for the owner, not for the internet
+        problems = [auth.problem] if auth.problem else ["not ready; the reasons are in the log and behind the login"]
+    return JSONResponse({"ready": not problems, "problems": problems}, status_code=status_code)
 
 
 @router.get("/status")

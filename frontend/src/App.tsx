@@ -11,7 +11,7 @@ import { SecondsTape } from "./components/SecondsTape";
 import { useLive } from "./live";
 import type { Job } from "./types";
 
-export function App() {
+export function App({ onSignOut }: { onSignOut?: () => void }) {
   const live = useLive();
   const { status, link } = live;
   const [selected, setSelected] = useState<string | null>(null);
@@ -33,7 +33,7 @@ export function App() {
 
   return (
     <div className="min-h-screen">
-      <Header status={status?.startup_error ? null : status} link={link} />
+      <Header status={status?.startup_error ? null : status} link={link} onSignOut={onSignOut} />
       {status?.provider?.synthetic ? <MockBanner /> : null}
 
       {!status ? (

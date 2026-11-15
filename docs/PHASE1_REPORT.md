@@ -389,8 +389,15 @@ What changed after this report was written:
   second, read-only and without touching the feed, so the assumption can be tested as
   soon as live ticks exist. Against the stand-in it reports full agreement and names
   the second when a quote is removed from the history.
-* **Tests now:** 204 on TimescaleDB 2.26.1, 202 and 2 skipped on plain PostgreSQL, 167
-  and 37 skipped without a database.
+* **Login, pulled forward from Phase 8.** The dashboard is wanted in any browser, also
+  on machines that cannot join a private network. `make password` stores a PBKDF2 hash;
+  with it the API, the live stream and the dashboard need a session (signed cookie,
+  HttpOnly, Secure, SameSite=Strict, 30 days), failed logins are throttled and the API
+  description pages are off. Tested through a real server and, at phone size, in a real
+  browser. That browser test found a defect that had been there all along: taking the
+  chart off the page threw an error and blanked it (fixed).
+* **Tests now:** 230 on TimescaleDB 2.26.1, 228 and 2 skipped on plain PostgreSQL, 181
+  and 49 skipped without a database; 15 dashboard tests.
 * **Decisions:** trading below one minute is intended, so all sub-minute bars stay;
   the dashboard is wanted on a phone, which [DEPLOY.md](DEPLOY.md) covers with a
   private network instead of a public address.

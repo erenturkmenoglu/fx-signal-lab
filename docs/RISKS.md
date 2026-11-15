@@ -11,7 +11,7 @@ Ordered by how much they matter for the next step.
 | R3 | Resolved on 15 November 2026: CI ran and passes (backend suite on the TimescaleDB image, dashboard, image build, stack smoke test). | | | |
 | R4 | Validation thresholds are provisional (chosen before seeing real data). | Too tight: real quotes rejected. Too loose: bad quotes pass. | Per-pair configuration; reject counters by reason on the dashboard and per minute in `ingest_stats_1m`. | Calibrate after a few days of EUR/USD data. |
 | R5 | Classic TimescaleDB compression API is deprecated since 2.18 (it works in the pinned 2.26.1, tested). | A future image could remove it. | Image tag is pinned; failures are visible, not fatal. | Move to the columnstore API in Phase 8. |
-| R6 | The dashboard and API have no authentication. | Anyone who can reach port 8000 can read data and trigger downloads. | Published on 127.0.0.1 only; documented. | Authentication in Phase 8, or a reverse proxy now if remote access is needed. |
+| R6 | One password protects the dashboard once it has a public address (login added on 15 November 2026; off until `make password` has run). | Whoever has the password sees the data and can start downloads. There is no second factor and there are no separate users. Failed logins are throttled for everybody together, so someone hammering the login can delay a new login by a minute at a time; sessions that exist are not affected. | At least 12 characters; only a PBKDF2 hash is stored; the session cookie is HttpOnly, Secure and SameSite=Strict; the API description pages are off when a password is set; without a password the port stays on 127.0.0.1. | A second factor and a proper reverse proxy in Phase 8. |
 | R7 | Provider bars are bid-based and UTC-aligned; the system's bars are mid-based and aligned to the New York rollover. | Long backtests on provider bars are not directly comparable with live-collected data. | Stored under different `source` and `price_basis`; never mixed. | Decide in Phase 3: rebuild history from `/v3/quotes` (accurate, heavy) or use bid bars with a spread model. |
 | R8 | Single process, single host. | A host outage stops collection. | Automatic restart; downtime is recorded and backfilled up to 72 h. | Run on an always-on machine, not a laptop. |
 | R9 | Massive stamps historical quotes (`/v3/quotes`) and the last quote in whole seconds: confirmed on 15 November 2026. Whether the live stream does the same is not known yet. | Recovered quotes cannot be ordered against live ones inside a second. If the stream is also whole-second, latency can only be bounded (to one second), not measured, and a 50 ms difference between hosting regions cannot be seen in the data. | Detected from the data and reported next to the latency figures; backfilled rows are tagged; equal quotes sharing a whole second are kept as separate quotes, as the provider counts them. | Read the latency note on the dashboard after the open. |
@@ -41,8 +41,9 @@ Ordered by how much they matter for the next step.
    but allows exact re-simulation of fills later. Measured on synthetic quotes: about
    28 MB per pair and trading day at 20 quotes a second once compressed, so about 7 GB a
    year per pair. To be confirmed on real data.
-2. **Costs for backtests.** Which spread, commission and slippage should Phase 3 assume
-   for your execution venue? The registry holds placeholders.
+2. **Costs for backtests.** Answered on 15 November 2026: 0.5 pips typical spread on
+   the venue, no commission; the backtests assume 1.0 pip. Still open: slippage, and
+   how wide the spread gets around the daily rollover and news.
 3. **Reaction time.** Below one minute, the delay between a signal and your order
    decides whether an edge survives. Phase 3 needs a realistic figure for it (seconds,
    from a phone); backtests will be run across a range of delays.

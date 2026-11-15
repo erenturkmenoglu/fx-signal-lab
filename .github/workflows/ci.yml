@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
-      - run: shellcheck scripts/server-setup.sh .github/wait-ready.sh .github/report-stack.sh .github/mem-peak.sh
+      - run: shellcheck scripts/server-setup.sh scripts/set-password.sh .github/wait-ready.sh .github/report-stack.sh .github/mem-peak.sh
       - name: Both Compose configurations are valid (the server's, and the one with CI limits)
         run: |
           docker compose -f docker-compose.yml config --quiet
@@ -140,6 +140,33 @@ jobs:
           test "$(docker compose exec -T db psql -U fxlab -d restore_test -Atc 'select count(*) from obs_1s')" -ge 5
           docker compose start app
           ./.github/wait-ready.sh
+      - name: A password closes the API, a login opens it
+        run: |
+          DASHBOARD_PASSWORD='ci only passphrase 2026' ./scripts/set-password.sh
+          grep -q '^DASHBOARD_PASSWORD_HASH=pbkdf2_sha256:' .env
+          if grep -q 'ci only passphrase' .env; then echo "the password itself is in .env"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/status)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/docs)" = "404"
+          curl -fsS -o /dev/null http://127.0.0.1:8000/api/health/ready
+          curl -fsS -o /dev/null http://127.0.0.1:8000/
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"password":"not the passphrase"}' http://127.0.0.1:8000/api/auth/login)" = "401"
+          # log in as a browser does; the cookie is for HTTPS only, so it is handed over by hand here
+          cookie="$(curl -fsS -D - -o /dev/null -H 'Content-Type: application/json' \
+            -d '{"password":"ci only passphrase 2026"}' http://127.0.0.1:8000/api/auth/login | tr -d '\r' | grep -i '^set-cookie: fxlab_session=')"
+          echo "$cookie" | grep -q 'HttpOnly'
+          echo "$cookie" | grep -q 'Secure'
+          echo "$cookie" | grep -qi 'SameSite=strict'
+          token="$(echo "$cookie" | sed 's/^[^=]*=\([^;]*\);.*/\1/')"
+          curl -fsS -H "Cookie: fxlab_session=$token" http://127.0.0.1:8000/api/status | python3 -c "
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s['provider']['label'] == 'MOCK', s['provider']
+          print('ok: logged in, data label', s['provider']['label'])"
+          # the command line inside the container shares the secret and keeps working
+          docker compose exec -T app python -m fxlab.cli gaps scan | grep -q queued
+          ./scripts/set-password.sh --remove
+          curl -fsS -o /dev/null http://127.0.0.1:8000/api/status
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: Logs on failure

@@ -134,7 +134,10 @@ export function PriceChart({
       vertAlign: "center",
       lines: [{ text: "MOCK DATA", color: "rgba(240, 180, 41, 0.13)", fontSize: 54 }],
     });
-    return () => mark.detach();
+    return () => {
+      // when the whole chart is unmounted it has been removed already, and the watermark with it
+      if (chart.current === c) mark.detach();
+    };
   }, [synthetic]);
 
   // --- (re)load data whenever the question changes ----------------------------------------
@@ -234,7 +237,9 @@ export function PriceChart({
     return () => {
       cancelled = true;
       unsubscribe();
-      c.removeSeries(series);
+      // On unmount the effect that created the chart cleans up first and removes it with all its
+      // series; touching the dead chart throws and takes the whole page down with it.
+      if (chart.current === c) c.removeSeries(series);
     };
   }, [symbol, precision, timeframe, source, generation, observations, subscribe, providerRange]);
 

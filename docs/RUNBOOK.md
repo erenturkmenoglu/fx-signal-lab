@@ -206,12 +206,28 @@ docker compose logs --tail 50 app
 Take a backup first. Database migrations are versioned (Alembic) and forward-only in
 normal operation.
 
-## Remote access
+## Remote access and the login
 
-The dashboard has no authentication yet and is published on `127.0.0.1` only. For
-remote access use an SSH tunnel (`ssh -L 8000:127.0.0.1:8000 host`) or put an
-authenticating reverse proxy in front of it. Do not publish port 8000 on a public
-interface.
+The application is published on `127.0.0.1` only. How to reach it from a phone or any
+browser is in [DEPLOY.md](DEPLOY.md), step 5.
+
+* `make password` sets or changes the dashboard password (asked twice, hidden). Only a
+  hash goes into `.env` (`DASHBOARD_PASSWORD_HASH`); the application restarts and every
+  browser is signed out. `make password ARGS=--remove` turns the login off.
+* With a password set, everything under `/api` except `/api/health/live`,
+  `/api/health/ready` and `/api/auth/*` answers 401 without a session, the live stream
+  refuses the connection, and `/docs` is off. `fxlab gaps scan` and `fill` keep working:
+  they run next to the application and use the same secret.
+* Forgotten password: run `make password` again. There is nothing to recover.
+* "Too many failed attempts": five wrong passwords within a minute lock the login for
+  everybody until the oldest is a minute old. If it keeps happening, somebody is
+  guessing; the lock is what stops them.
+* A broken `DASHBOARD_PASSWORD_HASH` (edited by hand) does not turn the login off: nobody
+  can log in, and `/api/health/ready` names the problem. Run `make password`.
+* The session cookie is sent over HTTPS only. For a plain `http://` tunnel to a browser
+  other than Chrome or Firefox on `localhost`, set `SESSION_COOKIE_SECURE=false`; never
+  on a public address.
+* Never publish port 8000 on a public interface without a password.
 
 ## Changing behaviour safely
 

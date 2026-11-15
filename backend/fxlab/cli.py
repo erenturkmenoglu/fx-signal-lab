@@ -9,6 +9,7 @@
     fxlab history --symbol EURUSD --timeframe 1m --start 2026-11-01 --end 2026-11-08
     fxlab gaps list | scan | fill --id N
     fxlab reconcile --minutes 10     compare live ticks with the provider's quote history
+    fxlab hash-password              turn a dashboard password into the hash for DASHBOARD_PASSWORD_HASH
 """
 
 from __future__ import annotations
@@ -214,19 +215,45 @@ def cmd_gaps(settings: Settings, args: argparse.Namespace) -> int:
 
     # scan / fill act on the running application so that live bars are rebuilt consistently
     base = args.api.rstrip("/")
+    headers = {}
+    if settings.password_hash:  # the application needs a login: this process holds the same secret
+        from fxlab.api.auth import Auth
+
+        headers["Authorization"] = f"Bearer {Auth(settings.password_hash).issue(ttl_s=120)}"
     try:
         if args.action == "scan":
-            resp = httpx.post(f"{base}/api/gaps/scan", timeout=60)
+            resp = httpx.post(f"{base}/api/gaps/scan", timeout=60, headers=headers)
         else:
             if args.id is None:
                 print("--id is required for 'fill'", file=sys.stderr)
                 return 2
-            resp = httpx.post(f"{base}/api/gaps/{args.id}/fill", timeout=60)
+            resp = httpx.post(f"{base}/api/gaps/{args.id}/fill", timeout=60, headers=headers)
     except httpx.HTTPError as exc:
         print(f"could not reach the running application at {base}: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(resp.json(), indent=2))
     return 0 if resp.status_code < 400 else 1
+
+
+def cmd_hash_password(_settings: Settings, args: argparse.Namespace) -> int:
+    import getpass
+
+    from fxlab.api.auth import check_new_password, hash_password
+
+    if args.stdin:
+        password = sys.stdin.readline().rstrip("\r\n")
+    else:
+        password = getpass.getpass("Dashboard password: ")
+        if getpass.getpass("Again: ") != password:
+            print("the two entries differ", file=sys.stderr)
+            return 2
+    try:
+        check_new_password(password)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(hash_password(password))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -256,6 +283,10 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--end", help="end of the window, ISO-8601 or epoch (default: the last settled minute)")
     rec.add_argument("--json", action="store_true", help="print the raw report as JSON")
     rec.set_defaults(func=cmd_reconcile)
+
+    hp = sub.add_parser("hash-password", help="make the value for DASHBOARD_PASSWORD_HASH (asks for the password)")
+    hp.add_argument("--stdin", action="store_true", help="read the password from standard input (one line)")
+    hp.set_defaults(func=cmd_hash_password)
 
     gaps = sub.add_parser("gaps", help="inspect and repair data gaps")
     gaps.add_argument("action", choices=["list", "scan", "fill"])

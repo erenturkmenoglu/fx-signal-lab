@@ -44,7 +44,10 @@ docker compose up -d --build
 Open <http://127.0.0.1:8000>. API documentation is at <http://127.0.0.1:8000/docs>.
 
 On a fresh server, `./scripts/server-setup.sh` does the same and installs Docker first;
-[docs/DEPLOY.md](docs/DEPLOY.md) walks through the server and phone access.
+[docs/DEPLOY.md](docs/DEPLOY.md) walks through the server and access from a phone or any
+browser. The dashboard has no login until `make password` has set one (the API pages
+under `/docs` are then switched off); without a login it belongs on this machine or a
+private network only.
 
 Then verify what your key can do. The probe needs the account's single WebSocket
 connection, so the app is stopped for a moment:
@@ -119,6 +122,7 @@ development environment (`fxlab ...`):
 | `history --symbol EURUSD --timeframe 1m --start 2026-11-01 --end 2026-11-08` | download provider bars |
 | `gaps list`, `gaps scan`, `gaps fill --id N` | inspect and repair data gaps |
 | `reconcile --minutes 10` | compare live ticks with the provider's quote history (read-only) |
+| `hash-password` | make the value for `DASHBOARD_PASSWORD_HASH` (what `make password` runs) |
 
 `make help` lists shortcuts for the usual Docker operations, including `make backup`.
 

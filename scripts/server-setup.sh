@@ -194,9 +194,13 @@ if [ -z "$ready" ]; then
 fi
 
 status="$(curl -fsS --max-time 5 http://127.0.0.1:8000/api/status 2>/dev/null || true)"
-label="$(printf '%s' "$status" | grep -o '"label":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
-state="$(printf '%s' "$status" | grep -o '"state":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
-note "application is up.  data: ${label:-unknown}   feed: ${state:-unknown}"
+if [ -n "$status" ]; then
+  label="$(printf '%s' "$status" | grep -o '"label":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
+  state="$(printf '%s' "$status" | grep -o '"state":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)"
+  note "application is up.  data: ${label:-unknown}   feed: ${state:-unknown}"
+else
+  note "application is up.  (A dashboard password is set, so its details need a login.)"
+fi
 
 say "Done"
 note "Dashboard on this machine: http://127.0.0.1:8000 (not reachable from outside, on purpose)"
@@ -206,4 +210,5 @@ if [ "${NEEDS_RELOGIN:-}" = "1" ]; then
   note "  log out and in once so that docker works without sudo (until then: sudo make verify)"
 fi
 note "  make verify        probes Massive with your key and prints a report"
-note "  docs/DEPLOY.md     phone access, updates, backups"
+note "  make password      sets the dashboard password (needed before any public address)"
+note "  docs/DEPLOY.md     access from a phone or any browser, updates, backups"

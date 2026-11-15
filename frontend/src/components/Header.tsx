@@ -10,7 +10,16 @@ const PROVIDER: Record<SystemStatus["provider"]["label"], { tone: Tone; text: st
   "NOT CONFIGURED": { tone: "bad", text: "No data provider" },
 };
 
-export function Header({ status, link }: { status: SystemStatus | null; link: Link }) {
+export function Header({
+  status,
+  link,
+  onSignOut,
+}: {
+  status: SystemStatus | null;
+  link: Link;
+  /** present only when this installation has a login */
+  onSignOut?: () => void;
+}) {
   const provider = status?.provider;
   const badge = provider ? PROVIDER[provider.label] : null;
   const sessions = status?.sessions ?? [];
@@ -42,6 +51,11 @@ export function Header({ status, link }: { status: SystemStatus | null; link: Li
         <span className="num text-[15px]" title="Backend clock, UTC">
           {timeUTC(status?.server_time_ms)} <span className="note">UTC</span>
         </span>
+        {onSignOut ? (
+          <button type="button" className="btn" onClick={onSignOut}>
+            Sign out
+          </button>
+        ) : null}
       </div>
     </header>
   );

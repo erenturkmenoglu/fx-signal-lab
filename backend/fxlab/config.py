@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     static_dir: Path | None = Field(None, description="built dashboard; served at / when set")
+    dashboard_password_hash: SecretStr | None = Field(
+        None, description="made by `fxlab hash-password`; set => the dashboard and API need a login"
+    )
+    session_cookie_secure: bool = Field(
+        True, description="the session cookie is only sent over HTTPS (keep on for any public address)"
+    )
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
 
@@ -84,7 +90,7 @@ class Settings(BaseSettings):
     mock_quotes_per_second: float = 4.0
     mock_faults: bool = Field(True, description="inject duplicates, outliers and silences into mock data")
 
-    @field_validator("massive_api_key", mode="before")
+    @field_validator("massive_api_key", "dashboard_password_hash", mode="before")
     @classmethod
     def _blank_key_is_missing(cls, v: object) -> object:
         if isinstance(v, str) and not v.strip():
@@ -102,6 +108,10 @@ class Settings(BaseSettings):
     @property
     def api_key(self) -> str | None:
         return self.massive_api_key.get_secret_value() if self.massive_api_key else None
+
+    @property
+    def password_hash(self) -> str | None:
+        return self.dashboard_password_hash.get_secret_value() if self.dashboard_password_hash else None
 
     @property
     def provider_configured(self) -> bool:

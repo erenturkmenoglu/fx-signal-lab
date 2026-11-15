@@ -15,10 +15,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from fxlab import __version__
+from fxlab.api.auth import Auth, require_session
+from fxlab.api.auth import router as auth_router
 from fxlab.api.routes import router
 from fxlab.config import Settings, get_settings
 from fxlab.domain.instruments import InstrumentRegistry
@@ -31,14 +33,27 @@ log = get_logger(__name__)
 
 LIVE_BACKLOG_SECONDS = 300
 
+#: The dashboard loads nothing from other hosts and may not be framed.  Styles are partly inline
+#: (React style attributes); scripts are not.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+    "font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    auth = Auth(settings.password_hash, cookie_secure=settings.session_cookie_secure)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configure_logging(settings.log_level, settings.log_format)
         register_secret(settings.api_key)
+        register_secret(settings.password_hash)
+        if auth.problem:
+            log.critical("login_unusable", error=auth.problem)
+        elif not auth.enabled:
+            log.warning("login_disabled", reason="DASHBOARD_PASSWORD_HASH is not set: keep this off public networks")
         app.state.startup_error = None
         app.state.service = None
         engine = make_engine(settings.database_url)
@@ -67,12 +82,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         description="Market-data ingestion, 1-second observation grid and monitoring API (Phase 1).",
         lifespan=lifespan,
+        # the interactive API pages describe every endpoint: not for an address that needs a login
+        docs_url=None if auth.enabled else "/docs",
+        redoc_url=None if auth.enabled else "/redoc",
+        openapi_url=None if auth.enabled else "/openapi.json",
     )
-    app.include_router(router, prefix="/api")
+    app.state.auth = auth
+    app.include_router(auth_router, prefix="/api")
+    app.include_router(router, prefix="/api", dependencies=[Depends(require_session)])
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next: Any) -> Response:
+        response: Response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        if auth.enabled:  # browsers ignore this over plain http, so it is harmless on a local port
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        return response
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket) -> None:
         """Live stream: a ``hello`` snapshot, then ``obs`` / ``status`` / ``event`` / ``resync`` messages."""
+        if not auth.authenticated(ws):
+            await ws.close(code=4401)  # before accept: the handshake is refused
+            return
         await ws.accept()
         service: IngestionService | None = app.state.service
         if service is None or not service.started:

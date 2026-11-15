@@ -1,5 +1,5 @@
 # Convenience targets.  `make help` lists them.
-.PHONY: help up down logs ps verify reconcile test test-backend test-frontend lint backup restore shell-db
+.PHONY: help up down logs ps verify reconcile password test test-backend test-frontend lint backup restore shell-db
 
 # database that backup and restore work on (the simulator's is fxlab_mock)
 DB ?= fxlab
@@ -26,6 +26,9 @@ verify: ## probe the Massive API with the configured key (stop the app first: on
 
 reconcile: ## compare live ticks with Massive's quote history; read-only, e.g. ARGS="--minutes 30"
 	docker compose exec -T app python -m fxlab.cli reconcile $(ARGS)
+
+password: ## set or change the dashboard password (asked twice, hidden); ARGS=--remove turns the login off
+	./scripts/set-password.sh $(ARGS)
 
 test: test-backend test-frontend ## run every test-suite
 
