@@ -41,8 +41,10 @@ like EUR/USD; real quotes may compress better or worse.
 |---|---|
 | Application | 65 to 95 MB; the same at 5, 20 and 50 quotes a second and with three pairs |
 | Database | 530 MB once its cache has filled (it takes a quarter of the memory by design), 50 to 70 MB right after a start |
-| Docker itself | about 185 MB |
-| Image build next to the running stack | about 375 MB at its peak (about 550 MB for the very first build, which also downloads the images) |
+| Database, while it compresses a day of ticks | 180 to 280 MB more, for a few seconds |
+| Application, while it recovers a gap | about 40 MB more per page of 50,000 quotes |
+| Docker itself | 170 to 185 MB |
+| Image build next to the running stack | about 375 MB at its peak (550 to 620 MB for the very first build, which also downloads the images) |
 | CPU, application and database together | 1.3% of one core at 5 quotes a second, 2.0% at 20, 3.0% at 50 |
 | Disk per pair and trading day | ticks: 108 bytes a quote (45 MB at 5 a second, 178 MB at 20), about a sixth of that once compressed after 7 days. 1-second grid: 13 MB, then 2.9 MB. Bars: 4.8 MB, then 1.1 MB |
 
@@ -50,17 +52,18 @@ What follows for the plan:
 
 * **2 GB ($12) is enough.** Database, application and Docker need about 800 MB. Ubuntu
   and Tailscale were not measured; with a typical 250 MB for the two, the server uses a
-  little over 1 GB of the 1.9 GB it really has, and a rebuild fits next to that. The
-  setup script still adds a 2 GB swap file on servers below 4 GB, so that a build can
-  never exhaust the memory. CI runs the stack on every push with the database limited
-  to 1,000 MB and the application to 350 MB.
+  little over 1 GB of the 1.9 GB it really has. A rebuild fits next to that, even one
+  that coincides with a compression run (about 1.7 GB in total). The setup script
+  still adds a 2 GB swap file on servers below 4 GB, so that a build can never exhaust
+  the memory. CI runs the stack on every push with the database limited to 1,000 MB and
+  the application to 350 MB.
 * **1 GB ($7) is not.** The database sizes itself smaller there (about 290 MB), but
   with everything else some 800 MB of 950 MB are taken before anything is built. Every
   update would push the running application into swap.
 * **4 GB ($24) buys memory and disk, nothing else.** The $12 and $24 plans have the same
   two vCPUs with the same baseline of 20% each; this workload uses 1 to 3% of one.
 * **Disk is not the constraint.** One pair at 20 quotes a second settles at about
-  1.4 GB of ticks (30 days are kept) and adds about 1 GB a year for the 1-second grid
+  1.3 GB of ticks (30 days are kept) and adds about 1 GB a year for the 1-second grid
   and the bars. Eight pairs at that rate come to about 20 GB in the first year.
 
 **When to move up:** when backtests over months of 1-second data are to run on the
