@@ -56,7 +56,9 @@ Settings, Billing, Upgrade); unused credit still counts.
 1. Sign in at <https://lightsail.aws.amazon.com> and choose **Create instance**.
 2. Region: **Virginia (us-east-1)** if your account lets you choose, otherwise the
    Region you are offered (see "If your AWS account is new").
-3. Platform: **Linux/Unix**. Blueprint: **OS Only**, then **Ubuntu 24.04 LTS**.
+3. Platform: **Linux operating system** (older consoles: **Linux/Unix**, then
+   **OS Only**). Blueprint: **Ubuntu 24.04 LTS**. Not one of the app blueprints such as
+   WordPress or "Plesk Hosting Stack on Ubuntu".
 4. Plan: **$24** (4 GB memory, 2 vCPUs, 80 GB SSD).
 5. Give it a name and create it. When it is running, open **Connect using SSH**: a
    terminal in the browser, no key files needed.
