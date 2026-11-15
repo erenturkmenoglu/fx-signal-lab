@@ -65,10 +65,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
-      - run: shellcheck scripts/server-setup.sh .github/wait-ready.sh
+      - run: shellcheck scripts/server-setup.sh .github/wait-ready.sh .github/report-stack.sh .github/mem-peak.sh
       - run: docker compose config --quiet
       - name: Build and start without an API key
-        run: docker compose up -d --build
+        run: ./.github/mem-peak.sh "first pull, build and start" docker compose up -d --build
       - name: Wait for the application
         run: ./.github/wait-ready.sh
       - name: Without a key nothing is collected
@@ -107,6 +107,10 @@ jobs:
           docker compose restart app
           ./.github/wait-ready.sh
           test "$(docker compose logs app | grep -c '"level": "error"')" = "0"
+      - name: Memory of a rebuild next to the running stack
+        run: ./.github/mem-peak.sh "rebuild of the image with nothing cached, stack running" docker compose build --no-cache app
+      - name: Database settings and memory
+        run: ./.github/report-stack.sh
       - name: Logs on failure
         if: failure()
         run: |
