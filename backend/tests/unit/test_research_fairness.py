@@ -58,7 +58,15 @@ def random_walk(seed: int, days: int = 30) -> Bars:
 
 #: random walks of 30 days each.  A strategy that trades twice a day needs more of them than one
 #: that trades ten times, to get to the same number of trades.
-WALKS = {"session_breakout": 110}
+WALKS = {
+    "session_breakout": 110,
+    "squeeze_breakout": 110,
+    "pivot_reversion": 80,
+    "round_number": 48,
+    "session_drift": 48,
+}
+#: the test market opens at 06:00 UTC, one hour before London does in June: the range it has is that hour
+PARAMS = {"session_breakout": {"range_hours": 1.0}}
 _walks: list[tuple[Bars, Bars]] = []
 
 
@@ -75,7 +83,7 @@ def pips_a_clip(walks: list[tuple[Bars, Bars]], key: str, ex: Execution) -> tupl
     clips = trades = 0
     money = 0.0
     for base, five in walks:
-        outcome = engine.run(base, five, STRATEGIES[key].signals(five, PIP), ex)
+        outcome = engine.run(base, five, STRATEGIES[key].signals(five, PIP, PARAMS.get(key)), ex)
         trades += len(outcome.trades)
         clips += sum(t.clips for t in outcome.trades)
         money += sum(t.pnl for t in outcome.trades)
@@ -103,7 +111,7 @@ def test_adding_to_positions_does_not_create_an_edge_either(key: str) -> None:
     def share_won(ex: Execution) -> float:
         won = total = 0
         for base, bars in walks[:8]:
-            for t in engine.run(base, bars, STRATEGIES[key].signals(bars, PIP), ex).trades:
+            for t in engine.run(base, bars, STRATEGIES[key].signals(bars, PIP, PARAMS.get(key)), ex).trades:
                 won += t.pnl > 0
                 total += 1
         return won / total

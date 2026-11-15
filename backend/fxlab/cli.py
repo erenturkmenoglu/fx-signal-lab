@@ -9,6 +9,8 @@
     fxlab history --symbol EURUSD --timeframe 1m --start 2026-01-01 --end 2026-11-14
     fxlab strategies                 the strategies a backtest can run, with their parameters
     fxlab backtest --strategy rsi_reversion --start 2026-01-01 --end 2026-11-14
+    fxlab board --request FILE       every strategy on every bar length at once (what the Signal board runs)
+    fxlab signals --request FILE     every signal of every method inside a window
     fxlab gaps list | scan | fill --id N
     fxlab reconcile --minutes 10     compare live ticks with the provider's quote history
     fxlab hash-password              turn a dashboard password into the hash for DASHBOARD_PASSWORD_HASH
@@ -274,6 +276,40 @@ def cmd_backtest(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_board(settings: Settings, args: argparse.Namespace) -> int:
+    """Every method at once (``board``), or every signal of a window (``signals``).  JSON in, JSON out."""
+    from fxlab.research.board import BoardRequest
+    from fxlab.research.report import BacktestError
+    from fxlab.services.backtest import run_board, run_window
+    from fxlab.storage.db import make_engine
+
+    registry = _registry(settings)
+
+    def progress(done: int, total: int, label: str) -> None:
+        # one line per method on standard error: the application reads them while it waits
+        print(f"PROGRESS {done} {total} {label}", file=sys.stderr, flush=True)
+
+    async def run(data: dict[str, Any]) -> dict[str, Any]:
+        engine = make_engine(settings.database_url)
+        try:
+            request = BoardRequest.from_mapping(data)
+            if args.command == "signals":
+                return await run_window(engine, registry, request)
+            return await run_board(engine, registry, request, progress if args.progress else None)
+        finally:
+            await engine.dispose()
+
+    try:
+        if args.request is None:
+            raise BacktestError("--request FILE is required ('-' = standard input)")
+        result = asyncio.run(run(_read_request(args.request)))
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}))
+        return 2
+    print(json.dumps(result))
+    return 0
+
+
 def cmd_reconcile(settings: Settings, args: argparse.Namespace) -> int:
     from fxlab.clock import SystemClock
     from fxlab.services.reconcile import format_reconciliation, reconcile
@@ -427,6 +463,15 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--json", action="store_true", help="print the whole report as JSON")
     bt.add_argument("--request", metavar="FILE", help="read the request as JSON from FILE ('-' = standard input)")
     bt.set_defaults(func=cmd_backtest)
+
+    for name, text in (
+        ("board", "run every strategy on every bar length over a period (JSON request, JSON answer)"),
+        ("signals", "every signal of every method inside a window (JSON request, JSON answer)"),
+    ):
+        many = sub.add_parser(name, help=text)
+        many.add_argument("--request", metavar="FILE", help="the request as JSON ('-' = standard input)")
+        many.add_argument("--progress", action="store_true", help="report each finished method on standard error")
+        many.set_defaults(func=cmd_board)
 
     rec = sub.add_parser("reconcile", help="compare live ticks with the provider's quote history (read-only)")
     rec.add_argument("--symbol", help="default: the first active instrument")

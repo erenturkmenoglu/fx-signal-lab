@@ -213,6 +213,104 @@ def test_macd_is_the_gap_between_two_averages_and_its_own_average() -> None:
     assert np.isnan(signal[:33]).all() and not np.isnan(signal[33])  # 26 + 9 - 2
 
 
+# --- oscillators over a range, channels, trailing lines ------------------------------------
+
+
+def test_rolling_extremes() -> None:
+    x = walk(120)
+    for n in (1, 3, 20):
+        top = [math.nan] * (n - 1) + [max(x[i - n + 1 : i + 1]) for i in range(n - 1, len(x))]
+        bottom = [math.nan] * (n - 1) + [min(x[i - n + 1 : i + 1]) for i in range(n - 1, len(x))]
+        assert same(ind.rolling_max(x, n), np.array(top), 0) and same(ind.rolling_min(x, n), np.array(bottom), 0)
+
+
+def test_stochastic_by_hand() -> None:
+    high = [10.0, 11.0, 12.0, 11.5, 13.0]
+    low = [9.0, 10.0, 10.5, 10.0, 11.0]
+    close = [9.5, 10.5, 12.0, 10.0, 12.5]
+    # n = 3, no smoothing: bar 2: range 9..12, close 12 -> 100; bar 3: 10..12, close 10 -> 0;
+    # bar 4: 10..13, close 12.5 -> 83.33.  %D over 2 bars: 50, 41.67
+    k, d = ind.stochastic(high, low, close, 3, 1, 2)
+    assert k.tolist() == pytest.approx([math.nan, math.nan, 100.0, 0.0, 250 / 3], nan_ok=True)
+    assert d.tolist() == pytest.approx([math.nan, math.nan, math.nan, 50.0, 125 / 3], nan_ok=True)
+
+
+def test_stochastic_matches_the_plain_definition_and_stays_in_bounds() -> None:
+    high, low, close = ohlc(300, seed=5)
+    n, smooth, signal = 14, 3, 3
+    raw = [math.nan] * len(close)
+    for i in range(n - 1, len(close)):
+        top, bottom = max(high[i - n + 1 : i + 1]), min(low[i - n + 1 : i + 1])
+        raw[i] = 100 * (close[i] - bottom) / (top - bottom) if top > bottom else 50.0
+    k = [math.nan] * len(close)
+    for i in range(n + smooth - 2, len(close)):
+        k[i] = sum(raw[i - smooth + 1 : i + 1]) / smooth
+    d = [math.nan] * len(close)
+    for i in range(n + smooth + signal - 3, len(close)):
+        d[i] = sum(k[i - signal + 1 : i + 1]) / signal
+    got_k, got_d = ind.stochastic(high, low, close, n, smooth, signal)
+    assert same(got_k, np.array(k), 1e-9) and same(got_d, np.array(d), 1e-9)
+    assert np.nanmin(got_k) >= 0 and np.nanmax(got_k) <= 100
+    flat = np.full(30, 1.16)
+    assert ind.stochastic(flat, flat, flat, 5)[0][-1] == 50.0  # no range: neither high nor low in it
+
+
+def test_cci_by_hand_and_by_definition() -> None:
+    # typical prices 1, 2, 3, 4 (high = low = close); n = 3
+    # bar 2: mean 2, mean absolute deviation 2/3 -> (3 - 2) / (0.015 * 2/3) = 100
+    flat = [1.0, 2.0, 3.0, 4.0]
+    assert ind.cci(flat, flat, flat, 3).tolist() == pytest.approx([math.nan, math.nan, 100.0, 100.0], nan_ok=True)
+    high, low, close = ohlc(300, seed=9)
+    n = 20
+    typical = ((high + low + close) / 3).tolist()
+    ref = [math.nan] * len(typical)
+    for i in range(n - 1, len(typical)):
+        window = typical[i - n + 1 : i + 1]
+        mean = sum(window) / n
+        deviation = sum(abs(v - mean) for v in window) / n
+        ref[i] = (typical[i] - mean) / (0.015 * deviation) if deviation > 0 else 0.0
+    assert same(ind.cci(high, low, close, n), np.array(ref), 1e-7)
+    still = np.full(30, 1.16)
+    assert ind.cci(still, still, still, 5)[-1] == 0.0
+
+
+def test_keltner_channel_is_an_average_with_true_ranges_around_it() -> None:
+    high, low, close = ohlc(200, seed=4)
+    middle, upper, lower = ind.keltner(high, low, close, 20, 10, 1.5)
+    assert same(middle, ind.ema(close, 20), 0)
+    width = 1.5 * ind.atr(high, low, close, 10)
+    assert np.isnan(upper[:19]).all() and np.isnan(lower[:19]).all()  # the average needs 20 bars
+    assert np.allclose((upper - middle)[19:], width[19:], rtol=0, atol=1e-15)
+    assert np.allclose((middle - lower)[19:], width[19:], rtol=0, atol=1e-15)
+
+
+def test_supertrend_trails_the_price_and_flips_when_a_close_crosses_it() -> None:
+    high, low, close = ohlc(600, seed=6)
+    line, direction = ind.supertrend(high, low, close, 10, 2.0)
+    assert np.isnan(line[:9]).all() and not np.isnan(line[9:]).any()
+    assert set(np.unique(direction[9:])) == {-1.0, 1.0}  # the walk trends both ways
+    flips = 0
+    for i in range(10, len(close)):
+        if direction[i] == direction[i - 1]:
+            # while the trend lasts the line never moves away from the price
+            assert (line[i] >= line[i - 1]) if direction[i] > 0 else (line[i] <= line[i - 1])
+            assert (close[i] >= line[i]) if direction[i] > 0 else (close[i] <= line[i])
+        else:
+            flips += 1
+            # the flip happens on the bar that closed across the old line
+            assert (close[i] > line[i - 1]) if direction[i] > 0 else (close[i] < line[i - 1])
+    assert flips > 5
+
+
+def test_supertrend_in_a_straight_line_up_never_flips() -> None:
+    high = np.arange(1.0, 80.0)
+    line, direction = ind.supertrend(high, high - 0.5, high - 0.25, 10, 3.0)
+    assert (direction[9:] == 1).all() and (np.diff(line[9:]) > 0).all()
+    # each bar gaps up: its true range is high - previous close = 1.25.  The line sits three of those
+    # below the middle of the bar (high - 0.25), that is high - 4, once the average has settled
+    assert line[-1] == pytest.approx(high[-1] - 4.0, abs=1e-3)
+
+
 # --- the rule that matters most ------------------------------------------------------------
 
 
@@ -231,6 +329,12 @@ def test_no_indicator_looks_ahead(cut: int) -> None:
         *zip(ind.bollinger(close, 14), ind.bollinger(c, 14), strict=True),
         *zip(ind.macd(close, 5, 14, 3), ind.macd(c, 5, 14, 3), strict=True),
         *zip(ind.adx(high, low, close, 14), ind.adx(h, lo, c, 14), strict=True),
+        (ind.rolling_max(high, 14), ind.rolling_max(h, 14)),
+        (ind.rolling_min(low, 14), ind.rolling_min(lo, 14)),
+        *zip(ind.stochastic(high, low, close, 14), ind.stochastic(h, lo, c, 14), strict=True),
+        (ind.cci(high, low, close, 14), ind.cci(h, lo, c, 14)),
+        *zip(ind.keltner(high, low, close, 14, 10), ind.keltner(h, lo, c, 14, 10), strict=True),
+        *zip(ind.supertrend(high, low, close, 10), ind.supertrend(h, lo, c, 10), strict=True),
     ]
     for full, short in pairs:
         assert len(short) == cut

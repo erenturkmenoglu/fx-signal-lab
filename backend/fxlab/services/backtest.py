@@ -12,8 +12,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from fxlab.domain.instruments import InstrumentRegistry
-from fxlab.domain.timeframes import TIMEFRAMES, get_timeframe
-from fxlab.research.bars import PROVIDER_SOURCE, load_provider_bars
+from fxlab.domain.timeframes import TIMEFRAMES, Timeframe, get_timeframe
+from fxlab.research.bars import PROVIDER_SOURCE, Bars, load_provider_bars
+from fxlab.research.board import BoardRequest, Progress, build_board, prepare_board, window_signals
 from fxlab.research.report import BacktestError, BacktestRequest, build_report, default_execution, prepare
 from fxlab.research.strategies import STRATEGIES
 from fxlab.storage import schema as s
@@ -89,12 +90,9 @@ def check_request(registry: InstrumentRegistry, request: BacktestRequest) -> Non
     prepare(registry.get(request.symbol), request)
 
 
-async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, request: BacktestRequest) -> dict[str, Any]:
-    """Load the bars of the request and run it.  Raises ``BacktestError`` with a message fit for the user."""
-    check_request(registry, request)
-    inst = registry.get(request.symbol)
-    base_tf = prepare(inst, request).base_tf  # everything about the request is checked before any data is read
-    instrument_id = await _instrument_id(engine, request.symbol)
+async def _stored_bars(engine: AsyncEngine, symbol: str, base_tf: Timeframe, start_ms: int, end_ms: int) -> Bars:
+    """The provider's bars of an instrument in a range, or a ``BacktestError`` that says what to do."""
+    instrument_id = await _instrument_id(engine, symbol)
     bars = None
     if instrument_id is not None:
         b = s.bars
@@ -102,8 +100,8 @@ async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, reques
             b.c.instrument_id == instrument_id,
             b.c.timeframe == base_tf.code,
             b.c.source == PROVIDER_SOURCE,
-            b.c.ts >= ms_to_dt(request.start_ms),
-            b.c.ts < ms_to_dt(request.end_ms),
+            b.c.ts >= ms_to_dt(start_ms),
+            b.c.ts < ms_to_dt(end_ms),
         )
         async with engine.connect() as conn:
             stored = int((await conn.execute(count)).scalar_one())
@@ -112,13 +110,61 @@ async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, reques
                 f"this period holds {stored:,} {base_tf.code} bars; one test loads at most {MAX_BARS:,}. "
                 "Choose a shorter period or longer base bars."
             )
-        bars = await load_provider_bars(
-            engine, instrument_id, base_tf.code, base_tf.seconds, request.start_ms, request.end_ms
-        )
+        bars = await load_provider_bars(engine, instrument_id, base_tf.code, base_tf.seconds, start_ms, end_ms)
     if bars is None or len(bars) == 0:
         raise BacktestError(
-            f"no {base_tf.code} history of {request.symbol} is stored between {iso(request.start_ms)} and "
-            f"{iso(request.end_ms)}. Download it first: fxlab history --symbol {request.symbol} "
+            f"no {base_tf.code} history of {symbol} is stored between {iso(start_ms)} and "
+            f"{iso(end_ms)}. Download it first: fxlab history --symbol {symbol} "
             f"--timeframe {base_tf.code} --start ... --end ..."
         )
+    return bars
+
+
+async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, request: BacktestRequest) -> dict[str, Any]:
+    """Load the bars of the request and run it.  Raises ``BacktestError`` with a message fit for the user."""
+    check_request(registry, request)
+    inst = registry.get(request.symbol)
+    base_tf = prepare(inst, request).base_tf  # everything about the request is checked before any data is read
+    bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms, request.end_ms)
     return build_report(bars, inst, request)
+
+
+# --- many methods at once ------------------------------------------------------------------
+
+#: bars loaded before a window of signals so that indicators have settled: three weeks
+RUN_IN_MS = 21 * DAY_MS
+#: the longest window of signals (the chart under it holds 20 000 bars at most anyway)
+MAX_WINDOW_MS = 62 * DAY_MS
+
+
+def check_board(registry: InstrumentRegistry, request: BoardRequest, *, window: bool = False) -> None:
+    """Everything that can be said about a board request without reading data."""
+    if request.symbol not in registry:
+        raise BacktestError(f"unknown instrument {request.symbol!r}")
+    if request.end_ms <= request.start_ms:
+        raise BacktestError("end must be after start")
+    longest = MAX_WINDOW_MS if window else MAX_RANGE_MS
+    if request.end_ms - request.start_ms > longest:
+        raise BacktestError(f"{'a window of signals' if window else 'one run'} covers at most {longest // DAY_MS} days")
+    prepare_board(registry.get(request.symbol), request)
+
+
+async def run_board(
+    engine: AsyncEngine, registry: InstrumentRegistry, request: BoardRequest, progress: Progress | None = None
+) -> dict[str, Any]:
+    """Every method on the stored history of a period."""
+    check_board(registry, request)
+    inst = registry.get(request.symbol)
+    base_tf = prepare_board(inst, request).base_tf
+    bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms, request.end_ms)
+    return build_board(bars, inst, request, progress)
+
+
+async def run_window(engine: AsyncEngine, registry: InstrumentRegistry, request: BoardRequest) -> dict[str, Any]:
+    """Every signal of every method inside a window, with the bars to draw them on."""
+    check_board(registry, request, window=True)
+    inst = registry.get(request.symbol)
+    base_tf = prepare_board(inst, request).base_tf
+    # three weeks before the window for the indicators, a day after it for the last trades to finish
+    bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms - RUN_IN_MS, request.end_ms + DAY_MS)
+    return window_signals(bars, inst, request, RUN_IN_MS)

@@ -123,7 +123,7 @@ def signal_timeframe(strategy: Strategy, requested: str | None, base: Timeframe)
     return tf
 
 
-def _split_day(split: str, day_names: list[str], warnings: list[str]) -> str | None:
+def split_day_of(split: str, day_names: list[str], warnings: list[str]) -> str | None:
     """The first out-of-sample trading day, or None when the period is not split."""
     if split == "none":
         return None
@@ -142,7 +142,7 @@ def _split_day(split: str, day_names: list[str], warnings: list[str]) -> str | N
     return day
 
 
-def _data_section(
+def data_section(
     base: Bars, tf: Timeframe, base_tf: Timeframe, signal_bars: int, day_names: list[str]
 ) -> dict[str, Any]:
     steps = np.diff(base.ts)
@@ -165,7 +165,7 @@ def _data_section(
     }
 
 
-def _inside_the_trading_week(base: Bars, inst: Instrument) -> Bars:
+def inside_the_trading_week(base: Bars, inst: Instrument) -> Bars:
     """The bars that fall into the hours the instrument trades (for spot FX: not the weekend).
 
     A provider may publish the odd quote while the market is closed.  Nothing can be traded on
@@ -232,7 +232,7 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
 
     warnings: list[str] = []
     asked = len(base)
-    base = _inside_the_trading_week(base, inst)
+    base = inside_the_trading_week(base, inst)
     if len(base) < asked:
         warnings.append(
             f"{asked - len(base):,} bars lie outside the instrument's trading week (weekend quotes) and were left out."
@@ -270,7 +270,7 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         "currency": inst.quote,
         "unit_currency": inst.base,
         "pip_value": pip_value,
-        "data": _data_section(base, tf, base_tf, len(signal_bars), day_names),
+        "data": data_section(base, tf, base_tf, len(signal_bars), day_names),
         "signals": dict(outcome.counters),
         "summary": metrics.summarize(rows, daily, pip_value),
         "daily": daily,
@@ -278,7 +278,7 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         "trades": rows,
     }
 
-    split_day = _split_day(request.split, day_names, warnings)
+    split_day = split_day_of(request.split, day_names, warnings)
     report["split_day"] = split_day
     if split_day is not None:
         for name, later in (("in_sample", False), ("out_of_sample", True)):

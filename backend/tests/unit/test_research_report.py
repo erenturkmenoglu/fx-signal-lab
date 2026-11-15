@@ -400,7 +400,7 @@ def test_requests_are_checked(eurusd) -> None:  # type: ignore[no-untyped-def]
 def test_other_timeframes_and_strategies_run(eurusd) -> None:  # type: ignore[no-untyped-def]
     bars = market()
     # the test market opens at 06:00 UTC: two hours of range before London's 08:00
-    params = {"session_breakout": {"range_hours": 2, "min_range_bars": 4}}
+    params = {"session_breakout": {"range_hours": 2}}
     for strategy in ("rsi_reversion", "ema_momentum", "session_breakout"):
         for timeframe in ("1m", "15m"):
             report = build_report(

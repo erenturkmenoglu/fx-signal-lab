@@ -195,11 +195,27 @@ class Trade:
         return sum(f.price * f.units for f in self.fills) / self.units
 
 
+#: why a signal was not traded (the keys of ``Outcome.counters`` next to "signals" and "traded")
+SKIP_OFF = "skipped: direction switched off"
+SKIP_POTENTIAL = "skipped: potential below the minimum"
+SKIP_BUSY = "skipped: a position was open or cooling down"
+SKIP_HOURS = "skipped: outside the entry hours"
+SKIP_NO_PRICE = "skipped: no price after the signal"
+SKIP_DAY_END = "skipped: too close to the end of the day"
+
+
 @dataclass
 class Outcome:
     trades: list[Trade] = field(default_factory=list)
     #: how many signals there were and why some were not traded
     counters: Counter[str] = field(default_factory=Counter)
+    #: what became of each signal, in order: (index of its bar, "traded" or the reason it was skipped);
+    #: the n-th "traded" entry belongs to the n-th trade
+    decisions: list[tuple[int, str]] = field(default_factory=list)
+
+    def _skip(self, bar: int, reason: str) -> None:
+        self.counters[reason] += 1
+        self.decisions.append((bar, reason))
 
 
 def next_clock_ms(ts_ms: int, time_of_day: str, tz: ZoneInfo) -> int:
@@ -242,36 +258,38 @@ def run(base: Bars, signal_bars: Bars, signals: Signals, ex: Execution) -> Outco
         direction = 1 if signals.direction[i] > 0 else -1
         signal_ms = int(signal_bars.ts[i]) + signal_bars.span_ms
         out.counters["signals"] += 1
+        bar = int(i)
         if not (ex.long if direction > 0 else ex.short):
-            out.counters["skipped: direction switched off"] += 1
+            out._skip(bar, SKIP_OFF)
             continue
         potential = float(signals.potential_pips[i]) - ex.spread_pips
         if not potential >= ex.min_potential_pips:  # also true for nan: the strategy cannot say
-            out.counters["skipped: potential below the minimum"] += 1
+            out._skip(bar, SKIP_POTENTIAL)
             continue
         if signal_ms < free_at:
-            out.counters["skipped: a position was open or cooling down"] += 1
+            out._skip(bar, SKIP_BUSY)
             continue
         if not _in_window(signal_ms, start, end):
-            out.counters["skipped: outside the entry hours"] += 1
+            out._skip(bar, SKIP_HOURS)
             continue
         planned = signal_ms + delay_ms
         j = int(np.searchsorted(ts, planned, side="left"))
         if j >= n or int(ts[j]) - planned > max_wait_ms:
-            out.counters["skipped: no price after the signal"] += 1
+            out._skip(bar, SKIP_NO_PRICE)
             continue
         # the trading day of the signal ends at the next ``day_end``; positions are closed at the
         # ``flat_time`` before it, and a signal between the two belongs to no tradable time
         deadline = next_clock_ms(signal_ms, ex.flat_time, tz)
         if deadline > next_clock_ms(signal_ms + 1, ex.day_end, tz) or int(ts[j]) >= deadline:
-            out.counters["skipped: too close to the end of the day"] += 1
+            out._skip(bar, SKIP_DAY_END)
             continue
         if j < free_index:  # the previous position is still open in this bar
-            out.counters["skipped: a position was open or cooling down"] += 1
+            out._skip(bar, SKIP_BUSY)
             continue
         trade, free_index = _trade(base, j, direction, signal_ms, deadline, potential, ex)
         out.trades.append(trade)
         out.counters["traded"] += 1
+        out.decisions.append((bar, "traded"))
         free_at = trade.exit_ms + cooldown_ms
     return out
 

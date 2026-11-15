@@ -13,10 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from fxlab.domain.instruments import InstrumentRegistry
 from fxlab.research.bars import Bars
+from fxlab.research.board import BoardRequest, build_board
 from fxlab.research.report import BacktestRequest, build_report
+from fxlab.services.backtest import run_window
 from tests.integration.test_api import AppServer, mock_settings
 from tests.integration.test_auth import PASSWORD, protected
-from tests.integration.test_backtest import REQUEST, store
+from tests.integration.test_backtest import BOARD, REQUEST, WINDOW, store
 from tests.unit.test_research_report import market
 
 pytestmark = pytest.mark.db
@@ -37,12 +39,14 @@ async def test_the_lab_describes_what_can_be_tested(lab: tuple[AppServer, Bars])
     async with httpx.AsyncClient(base_url=app.url) as http:
         described = (await http.get("/api/lab")).json()
         assert described["symbol"] == "EURUSD" and described["currency"] == "USD"
-        assert [s["key"] for s in described["strategies"]] == [
+        assert [s["key"] for s in described["strategies"]][:4] == [
             "rsi_reversion",
             "bollinger_reversion",
             "ema_momentum",
             "session_breakout",
         ]
+        assert len(described["strategies"]) == 15 and described["strategies"][-1]["key"] == "random_entry"
+        assert {s["family"] for s in described["strategies"]} >= {"reversion", "trend", "breakout", "level", "time"}
         rsi = described["strategies"][0]
         assert rsi["timeframe"] == "5m" and rsi["params"][0] == {
             "name": "rsi_period",
@@ -147,3 +151,120 @@ async def test_the_lab_needs_the_login(
         assert (await http.get("/api/lab")).json()["history"][0]["bars"] == 6 * 900
         report = await http.post("/api/backtests", json={**REQUEST, "end": "2026-10-13"})
         assert report.status_code == 200 and report.json()["data"]["trading_days"] == 6
+
+
+# --- the signal board ----------------------------------------------------------------------
+
+
+async def finished(http: httpx.AsyncClient, run_id: int) -> dict:
+    """Poll until the board run with this id has ended; returns the state."""
+    for _ in range(600):
+        state = (await http.get("/api/board")).json()
+        if state["run"]["id"] == run_id and state["run"]["status"] != "running":
+            return state
+        await asyncio.sleep(0.1)
+    raise AssertionError("the board run did not end")
+
+
+async def test_a_board_runs_in_the_background_and_reports_its_progress(
+    lab: tuple[AppServer, Bars], registry: InstrumentRegistry
+) -> None:
+    app, bars = lab
+    async with httpx.AsyncClient(base_url=app.url, timeout=60) as http:
+        assert (await http.get("/api/board")).json() == {"run": None, "result": None}
+        missing = await http.get("/api/board/result")
+        assert missing.status_code == 404 and "no board has been run" in missing.json()["detail"]
+
+        started = await http.post("/api/board/runs", json=BOARD)
+        assert started.status_code == 202
+        run = started.json()["run"]
+        assert (run["id"], run["status"], run["done"], run["finished_ms"]) == (1, "running", 0, None)
+        assert run["request"] == BOARD and started.json()["result"] is None
+        # one run at a time
+        again = await http.post("/api/board/runs", json=BOARD)
+        assert again.status_code == 409 and "a board run is in progress" in again.json()["detail"]
+        # the live feed and the rest of the API answer while it runs
+        assert (await http.get("/api/status")).json()["connection"]["state"] == "streaming"
+
+        state = await finished(http, 1)
+        assert state["run"]["status"] == "done" and state["run"]["error"] is None
+        assert (state["run"]["done"], state["run"]["total"], state["run"]["label"]) == (6, 6, "random_entry@15m")
+        assert state["run"]["finished_ms"] >= state["run"]["started_ms"]
+        assert state["result"]["id"] == 1 and state["result"]["size"] > 1000 and "bytes" not in state["result"]
+
+        result = await http.get("/api/board/result")
+        assert result.status_code == 200 and result.headers["content-type"] == "application/json"
+        expected = build_board(bars, registry.get("EURUSD"), BoardRequest.from_mapping(BOARD))
+        assert result.json() == json.loads(json.dumps(expected))
+        assert len(result.json()["combos"]) == 6
+
+
+async def test_a_board_that_cannot_run_says_why_and_keeps_the_last_result(lab: tuple[AppServer, Bars]) -> None:
+    app, _ = lab
+    async with httpx.AsyncClient(base_url=app.url, timeout=60) as http:
+        for changes, message in (
+            ({"strategies": ["martingale"]}, "unknown strategy 'martingale'"),
+            ({"timeframes": ["4h"]}, "follow the trading day"),
+            ({"symbol": "XAUUSD"}, "unknown instrument"),
+            ({"start": "2026-10-24", "end": "2026-10-05"}, "end must be after start"),
+            ({"params": {}}, "unknown field 'params'"),
+        ):
+            refused = await http.post("/api/board/runs", json={**BOARD, **changes})
+            assert refused.status_code == 400 and message in refused.json()["detail"], changes
+        assert (await http.get("/api/board")).json()["run"] is None  # nothing was started
+
+        assert (await http.post("/api/board/runs", json=BOARD)).status_code == 202
+        assert (await finished(http, 1))["run"]["status"] == "done"
+        # nothing wrong with the request, but no history for it: the run itself finds out
+        assert (
+            await http.post("/api/board/runs", json={**BOARD, "start": "2026-06-01", "end": "2026-06-08"})
+        ).status_code == 202
+        state = await finished(http, 2)
+        assert (
+            state["run"]["status"] == "failed" and "no 1m history of EURUSD is stored between" in state["run"]["error"]
+        )
+        assert state["result"]["id"] == 1  # the board of the first run is still there
+        assert (await http.get("/api/board/result")).json()["request"]["start"] == "2026-10-05T00:00:00.000Z"
+
+
+async def test_a_board_run_that_takes_too_long_is_stopped(
+    lab: tuple[AppServer, Bars], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _ = lab
+    async with httpx.AsyncClient(base_url=app.url, timeout=60) as http:
+        monkeypatch.setattr("fxlab.api.lab.MAX_BOARD_SECONDS", 0.05)
+        assert (await http.post("/api/board/runs", json=BOARD)).status_code == 202
+        state = await finished(http, 1)
+        assert state["run"]["status"] == "failed" and "took longer than" in state["run"]["error"]
+        monkeypatch.setattr("fxlab.api.lab.MAX_BOARD_SECONDS", 120.0)
+        monkeypatch.setattr(sys, "executable", "/bin/false")  # a child that breaks at once
+        assert (await http.post("/api/board/runs", json=BOARD)).status_code == 202
+        broken = await finished(http, 2)
+        assert broken["run"]["error"] == "the run stopped with an error; see the application log"
+
+
+async def test_the_signals_of_a_window_over_http(
+    lab: tuple[AppServer, Bars], engine: AsyncEngine, registry: InstrumentRegistry
+) -> None:
+    app, _ = lab
+    async with httpx.AsyncClient(base_url=app.url, timeout=60) as http:
+        response = await http.post("/api/board/signals", json=WINDOW)
+        assert response.status_code == 200
+        expected = await run_window(engine, registry, BoardRequest.from_mapping(WINDOW))
+        assert response.json() == json.loads(json.dumps(expected))
+        assert response.json()["bars"]["timeframe"] == "15m" and len(response.json()["signals"]) > 10
+        for changes, message in (
+            ({"start": "2026-07-01"}, "a window of signals covers at most 62 days"),
+            ({"chart_timeframe": "1d"}, "follow the trading day"),
+            ({"start": "2026-03-02", "end": "2026-03-04"}, "no 1m history of EURUSD is stored between"),
+        ):
+            refused = await http.post("/api/board/signals", json={**WINDOW, **changes})
+            assert refused.status_code == 400 and message in refused.json()["detail"], changes
+
+
+async def test_the_board_needs_the_login(engine: AsyncEngine, migrated_database: str) -> None:
+    async with AppServer(protected(migrated_database)) as app, httpx.AsyncClient(base_url=app.url, timeout=60) as http:
+        assert (await http.get("/api/board")).status_code == 401
+        assert (await http.get("/api/board/result")).status_code == 401
+        assert (await http.post("/api/board/runs", json=BOARD)).status_code == 401
+        assert (await http.post("/api/board/signals", json=WINDOW)).status_code == 401

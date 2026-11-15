@@ -36,7 +36,8 @@ def _check_period(n: int) -> None:
 
 
 def _rolling(values: Array, n: int, how: str) -> Array:
-    """Exact rolling mean or population standard deviation over ``n`` values.
+    """Exact rolling mean, population standard deviation, maximum, minimum or mean absolute
+    deviation over ``n`` values.
 
     Works on real windows (no running sums), so there is no cancellation error on prices
     that differ only in the fifth decimal, and no dependence on anything outside the window.
@@ -48,7 +49,17 @@ def _rolling(values: Array, n: int, how: str) -> Array:
     step = max(1, _CHUNK_BYTES // (8 * n))
     for start in range(0, len(windows), step):
         block = windows[start : start + step]
-        out[start + n - 1 : start + n - 1 + len(block)] = block.mean(axis=1) if how == "mean" else block.std(axis=1)
+        if how == "mean":
+            result = block.mean(axis=1)
+        elif how == "std":
+            result = block.std(axis=1)
+        elif how == "max":
+            result = block.max(axis=1)
+        elif how == "min":
+            result = block.min(axis=1)
+        else:  # mean absolute deviation from the window's own mean
+            result = np.abs(block - block.mean(axis=1, keepdims=True)).mean(axis=1)
+        out[start + n - 1 : start + n - 1 + len(block)] = result
     return out
 
 
@@ -62,6 +73,18 @@ def rolling_std(values: npt.ArrayLike, n: int) -> Array:
     """Population standard deviation of the last ``n`` values."""
     _check_period(n)
     return _rolling(_as_array(values), n, "std")
+
+
+def rolling_max(values: npt.ArrayLike, n: int) -> Array:
+    """Highest of the last ``n`` values (the current one included)."""
+    _check_period(n)
+    return _rolling(_as_array(values), n, "max")
+
+
+def rolling_min(values: npt.ArrayLike, n: int) -> Array:
+    """Lowest of the last ``n`` values (the current one included)."""
+    _check_period(n)
+    return _rolling(_as_array(values), n, "min")
 
 
 def ema(values: npt.ArrayLike, n: int) -> Array:
@@ -177,3 +200,80 @@ def adx(high: npt.ArrayLike, low: npt.ArrayLike, close: npt.ArrayLike, n: int = 
     minus_di[flat] = 0.0
     dx[np.isnan(smoothed_tr)] = np.nan
     return _wilder(dx, n, n), plus_di, minus_di
+
+
+def stochastic(
+    high: npt.ArrayLike, low: npt.ArrayLike, close: npt.ArrayLike, n: int = 14, smooth: int = 3, signal: int = 3
+) -> tuple[Array, Array]:
+    """Stochastic oscillator: (%K, %D), each 0 to 100.
+
+    Raw %K is where the close stands in the range of the last ``n`` bars; %K is its simple
+    average over ``smooth`` bars (1 = the fast stochastic) and %D the average of %K over
+    ``signal`` bars.  A range of zero gives 50: the close is neither high nor low in it.
+    """
+    c = _as_array(close)
+    top, bottom = rolling_max(high, n), rolling_min(low, n)
+    span = top - bottom
+    with np.errstate(divide="ignore", invalid="ignore"):
+        raw = np.where(span > 0, 100.0 * (c - bottom) / span, 50.0)
+    raw[np.isnan(span)] = np.nan
+    k = sma(raw, smooth)
+    return k, sma(k, signal)
+
+
+def cci(high: npt.ArrayLike, low: npt.ArrayLike, close: npt.ArrayLike, n: int = 20) -> Array:
+    """Lambert's Commodity Channel Index.
+
+    The typical price (high + low + close) / 3 against its own average, in units of 0.015
+    times its mean absolute deviation, so that most values fall between -100 and +100.
+    No deviation at all gives 0.
+    """
+    typical = (_as_array(high) + _as_array(low) + _as_array(close)) / 3.0
+    mean = sma(typical, n)
+    deviation = _rolling(typical, n, "mad")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.where(deviation > 0, (typical - mean) / (0.015 * deviation), 0.0)
+    out[np.isnan(deviation)] = np.nan
+    return out
+
+
+def keltner(
+    high: npt.ArrayLike, low: npt.ArrayLike, close: npt.ArrayLike, n: int = 20, atr_n: int = 10, k: float = 2.0
+) -> tuple[Array, Array, Array]:
+    """Keltner channel: (middle, upper, lower) = EMA of the close and EMA +/- ``k`` average true ranges."""
+    middle = ema(close, n)
+    width = k * atr(high, low, close, atr_n)
+    return middle, middle + width, middle - width
+
+
+def supertrend(
+    high: npt.ArrayLike, low: npt.ArrayLike, close: npt.ArrayLike, n: int = 10, multiple: float = 3.0
+) -> tuple[Array, Array]:
+    """Supertrend: (line, direction).  Direction is +1 while the close is above the line, -1 below.
+
+    The line trails the price at ``multiple`` average true ranges from the middle of the bar
+    and only ever moves toward the price; the direction flips when a bar closes across it.
+    """
+    _check_period(n)
+    h, lo, c = _as_array(high), _as_array(low), _as_array(close)
+    line = np.full(c.shape, np.nan)
+    direction = np.full(c.shape, np.nan)
+    width = multiple * atr(h, lo, c, n)
+    middle = (h + lo) / 2.0
+    upper_raw, lower_raw = middle + width, middle - width
+    start = n - 1
+    if len(c) <= start:
+        return line, direction
+    upper, lower = float(upper_raw[start]), float(lower_raw[start])
+    trend = 1.0 if c[start] >= middle[start] else -1.0
+    line[start], direction[start] = (lower if trend > 0 else upper), trend
+    for i in range(start + 1, len(c)):
+        # a band only tightens, unless the last close already broke through it
+        upper = float(upper_raw[i]) if (upper_raw[i] < upper or c[i - 1] > upper) else upper
+        lower = float(lower_raw[i]) if (lower_raw[i] > lower or c[i - 1] < lower) else lower
+        if trend > 0 and c[i] < lower:
+            trend = -1.0
+        elif trend < 0 and c[i] > upper:
+            trend = 1.0
+        line[i], direction[i] = (lower if trend > 0 else upper), trend
+    return line, direction

@@ -22,6 +22,7 @@ from fxlab import __version__
 from fxlab.api.auth import Auth, require_session
 from fxlab.api.auth import router as auth_router
 from fxlab.api.lab import router as lab_router
+from fxlab.api.lab import stop_runs
 from fxlab.api.routes import router
 from fxlab.config import Settings, get_settings
 from fxlab.domain.instruments import InstrumentRegistry
@@ -74,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await stop_runs(app)
             if service is not None:
                 await service.stop()
             await engine.dispose()

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from fxlab.research import indicators as ind
-from fxlab.research.bars import Bars
+from fxlab.research.bars import Bars, resample
 from fxlab.research.engine import Signals
 from fxlab.research.strategies import STRATEGIES, Param, get_strategy
 from fxlab.timeutil import MINUTE_MS
@@ -232,12 +232,19 @@ def test_session_breakout_follows_the_clock_of_the_place() -> None:
 
 
 def test_session_breakout_needs_enough_bars_to_call_something_a_range() -> None:
-    start = utc_ms(2026, 11, 11, 7, 0)  # the data only starts an hour before the open: 12 bars of range
+    start = utc_ms(
+        2026, 11, 11, 7, 0
+    )  # the data only starts an hour before the open: 12 bars of the 60 of a full range
     bars = london_day(start, {14: 1.1650}, n=40)
     strategy = get_strategy("session_breakout")
     values = {"session": "london", "range_hours": 5, "window_hours": 3}
-    assert events(strategy.signals(bars, PIP, {**values, "min_range_bars": 12})) == [(14, 1)]
-    assert events(strategy.signals(bars, PIP, {**values, "min_range_bars": 13})) == []
+    assert events(strategy.signals(bars, PIP, {**values, "min_coverage": 0.2})) == [(14, 1)]
+    assert events(strategy.signals(bars, PIP, {**values, "min_coverage": 0.21})) == []
+    assert events(strategy.signals(bars, PIP, values)) == []  # by default half the range must be there
+    # the share does not depend on the length of the bars: the same hour as four quarter-hour bars of twenty
+    quarter = resample(bars, 900)
+    assert len(events(strategy.signals(quarter, PIP, {**values, "min_coverage": 0.2}))) == 1
+    assert events(strategy.signals(quarter, PIP, {**values, "min_coverage": 0.21})) == []
 
 
 def test_session_breakout_trades_every_day_on_its_own_range() -> None:
@@ -293,10 +300,30 @@ def test_parameters_that_do_not_go_together_are_refused() -> None:
 
 
 def test_strategies_describe_themselves_for_a_form() -> None:
-    assert list(STRATEGIES) == ["rsi_reversion", "bollinger_reversion", "ema_momentum", "session_breakout"]
+    assert list(STRATEGIES) == [
+        "rsi_reversion",
+        "bollinger_reversion",
+        "ema_momentum",
+        "session_breakout",
+        "stochastic_reversion",
+        "cci_reversion",
+        "macd_cross",
+        "dmi_cross",
+        "supertrend_flip",
+        "donchian_breakout",
+        "squeeze_breakout",
+        "pivot_reversion",
+        "round_number",
+        "session_drift",
+        "random_entry",
+    ]
+    shorts = [s.short for s in STRATEGIES.values()]
+    assert len(set(shorts)) == len(shorts) and all(1 < len(short) <= 4 for short in shorts)  # marks on a chart
+    assert {s.family for s in STRATEGIES.values()} == {"reversion", "trend", "breakout", "level", "time", "benchmark"}
     for strategy in STRATEGIES.values():
         described = strategy.describe()
         assert described["key"] == strategy.key and described["title"] and described["summary"]
+        assert described["short"] == strategy.short and described["family"] == strategy.family
         assert described["timeframe"] == "5m"
         for param in described["params"]:
             assert param["kind"] in ("int", "float", "choice") and param["label"]
@@ -305,3 +332,257 @@ def test_strategies_describe_themselves_for_a_form() -> None:
     with pytest.raises(ValueError, match="unknown strategy 'martingale'; there are: rsi_reversion"):
         get_strategy("martingale")
     assert Param("n", "N", 3, "int").coerce("4") == 4
+
+
+# --- the strategies added from the survey of indicators --------------------------------------
+
+
+def bars_from(rows: list[tuple[float, float, float, float]], start: int) -> Bars:
+    """Five-minute bars from (open, high, low, close) rows."""
+    ts = start + np.arange(len(rows), dtype=np.int64) * 5 * MINUTE_MS
+    o, h, lo, c = (np.array([r[i] for r in rows], dtype=float) for i in range(4))
+    return Bars(ts, o, h, lo, c, 300)
+
+
+def test_stochastic_reversion_needs_the_turn_inside_the_zone() -> None:
+    bars = random_bars(1500, 21)
+    sig = get_strategy("stochastic_reversion").signals(bars, PIP)
+    k, d = ind.stochastic(bars.high, bars.low, bars.close, 14, 3, 3)
+    middle = (ind.rolling_max(bars.high, 14) + ind.rolling_min(bars.low, 14)) / 2
+    got = events(sig)
+    assert {side for _, side in got} == {1, -1} and len(got) > 20
+    for i, side in got:
+        if side > 0:
+            assert k[i] > d[i] and k[i - 1] <= d[i - 1] and k[i - 1] < 20
+            assert sig.potential_pips[i] == pytest.approx((middle[i] - bars.close[i]) / PIP)
+        else:
+            assert k[i] < d[i] and k[i - 1] >= d[i - 1] and k[i - 1] > 80
+            assert sig.potential_pips[i] == pytest.approx((bars.close[i] - middle[i]) / PIP)
+    # a turn in the middle of the scale is not a signal: there are many more crosses than signals
+    crosses = int(np.count_nonzero((k[1:] > d[1:]) != (k[:-1] > d[:-1])))
+    assert crosses > 2 * len(got)
+
+
+def test_cci_reversion_signals_on_the_way_back_or_on_the_way_out() -> None:
+    bars = random_bars(1500, 22)
+    strategy = get_strategy("cci_reversion")
+    cci = ind.cci(bars.high, bars.low, bars.close, 20)
+    mean = ind.sma((bars.high + bars.low + bars.close) / 3, 20)
+    leave = strategy.signals(bars, PIP)
+    for i, side in events(leave):
+        assert (cci[i] > -100 >= cci[i - 1]) if side > 0 else (cci[i] < 100 <= cci[i - 1])
+        expected = (mean[i] - bars.close[i]) / PIP if side > 0 else (bars.close[i] - mean[i]) / PIP
+        assert leave.potential_pips[i] == pytest.approx(expected)
+    enter = strategy.signals(bars, PIP, {"trigger": "enter"})
+    for i, side in events(enter):
+        assert (cci[i] < -100 <= cci[i - 1]) if side > 0 else (cci[i] > 100 >= cci[i - 1])
+    assert len(events(leave)) > 10 and len(events(enter)) > 10
+    assert len(events(strategy.signals(bars, PIP, {"level": 200}))) < len(events(leave))
+
+
+def test_macd_cross_and_the_side_of_the_zero_line() -> None:
+    bars = random_bars(1500, 23)
+    strategy = get_strategy("macd_cross")
+    line, signal, _ = ind.macd(bars.close, 12, 26, 9)
+    every = events(strategy.signals(bars, PIP))
+    for i, side in every:
+        assert (
+            (line[i] > signal[i] and line[i - 1] <= signal[i - 1])
+            if side > 0
+            else (line[i] < signal[i] and line[i - 1] >= signal[i - 1])
+        )
+    against = events(strategy.signals(bars, PIP, {"zero": "against"}))
+    with_trend = events(strategy.signals(bars, PIP, {"zero": "with"}))
+    assert all((line[i] < 0) == (side > 0) for i, side in against)
+    assert all((line[i] > 0) == (side > 0) for i, side in with_trend)
+    assert set(against) | set(with_trend) <= set(every) and not set(against) & set(with_trend)
+    assert len(against) > 5 and len(with_trend) > 5
+    sig = strategy.signals(bars, PIP, {"atr_multiple": 2.0})
+    i = every[0][0]
+    assert sig.potential_pips[i] == pytest.approx(2.0 * ind.atr(bars.high, bars.low, bars.close, 14)[i] / PIP)
+    with pytest.raises(ValueError, match="fast must be shorter than slow"):
+        strategy.resolve({"fast": 30})
+
+
+def test_dmi_cross_only_counts_while_the_adx_shows_a_trend() -> None:
+    bars = random_bars(1500, 24)
+    strategy = get_strategy("dmi_cross")
+    adx, plus, minus = ind.adx(bars.high, bars.low, bars.close, 14)
+    filtered = events(strategy.signals(bars, PIP))
+    unfiltered = events(strategy.signals(bars, PIP, {"adx_min": 0}))
+    for i, side in unfiltered:
+        assert (
+            (plus[i] > minus[i] and plus[i - 1] <= minus[i - 1])
+            if side > 0
+            else (plus[i] < minus[i] and plus[i - 1] >= minus[i - 1])
+        )
+    assert set(filtered) < set(unfiltered) and all(adx[i] >= 20 for i, _ in filtered)
+    assert all(not adx[i] >= 20 for i, _ in set(unfiltered) - set(filtered))
+
+
+def test_supertrend_flip_signals_where_the_trend_changes_side() -> None:
+    bars = random_bars(1500, 25)
+    sig = get_strategy("supertrend_flip").signals(bars, PIP, {"multiple": 2.0})
+    _, direction = ind.supertrend(bars.high, bars.low, bars.close, 10, 2.0)
+    flips = [(i, int(direction[i])) for i in range(1, len(bars)) if direction[i] * direction[i - 1] < 0]
+    assert events(sig) == flips and len(flips) > 10
+
+
+def test_donchian_breakout_by_hand() -> None:
+    start = utc_ms(2026, 11, 11, 8, 0)
+    quiet = [(1.1600, 1.1605, 1.1595, 1.1600)] * 6
+    bars = bars_from(
+        [
+            *quiet,  # the channel of these bars: 1.1595 to 1.1605
+            (1.1600, 1.1604, 1.1598, 1.1603),  # inside
+            (1.1603, 1.1609, 1.1602, 1.1608),  # the first close above 1.1605: buy
+            (
+                1.1608,
+                1.1612,
+                1.1606,
+                1.1611,
+            ),  # still above the channel before it (top now 1.1609): a new high, no new signal
+            (1.1611, 1.1611, 1.1590, 1.1592),  # falls through the bottom 1.1595: sell
+            (1.1592, 1.1593, 1.1585, 1.1586),  # lower still: no second sell
+        ],
+        start,
+    )
+    sig = get_strategy("donchian_breakout").signals(bars, PIP, {"period": 6})
+    assert events(sig) == [(7, 1), (9, -1)]
+    assert sig.potential_pips[7] == pytest.approx(10.0)  # the height of the channel: 1.1605 - 1.1595
+    assert sig.potential_pips[9] == pytest.approx(17.0)  # by then: 1.1612 - 1.1595
+
+
+def test_squeeze_breakout_trades_the_end_of_a_quiet_stretch() -> None:
+    start = utc_ms(2026, 11, 11, 8, 0)
+    rng = np.random.default_rng(3)
+    wild = 1.16 + np.cumsum(rng.normal(0, 0.0004, 60))  # bands wide
+    quiet = wild[-1] + np.cumsum(rng.normal(0, 0.00002, 40))  # closes hardly move, bars keep their range
+    burst = quiet[-1] + np.arange(1, 9) * 0.0007  # a run upward
+    bars = five_minute_bars(np.round(np.concatenate((wild, quiet, burst)), 5), start)
+    strategy = get_strategy("squeeze_breakout")
+    sig = strategy.signals(bars, PIP)
+    got = events(sig)
+    in_burst = [(i, side) for i, side in got if i >= 100]
+    assert in_burst == [(in_burst[0][0], 1)] and in_burst[0][0] <= 103  # one buy, as the quiet ends
+    middle, upper, lower = ind.bollinger(bars.close, 20, 2.0)
+    _, kc_upper, kc_lower = ind.keltner(bars.high, bars.low, bars.close, 20, 20, 1.5)
+    i = in_burst[0][0]
+    squeezed = (upper < kc_upper) & (lower > kc_lower)
+    assert not squeezed[i] and squeezed[i - 6 : i].all() and bars.close[i] > middle[i]
+    assert sig.potential_pips[i] == pytest.approx(3.0 * ind.atr(bars.high, bars.low, bars.close, 20)[i] / PIP)
+    # asking for a longer quiet stretch than there was: no signal
+    assert not [e for e in events(strategy.signals(bars, PIP, {"min_bars": 60})) if e[0] >= 100]
+
+
+def test_pivot_reversion_by_hand() -> None:
+    # Tuesday 10 November 2026 from 22:00 UTC is Wednesday's trading day in New York (17:00 there)
+    day1 = utc_ms(2026, 11, 10, 22, 0)
+    quiet = (1.1620, 1.1625, 1.1615, 1.1620)
+    # one wide bar after midnight UTC makes the day's range: H 1.1640, L 1.1580; the day closes at 1.1620
+    first = [quiet] * 30 + [(1.1600, 1.1640, 1.1580, 1.1620)] + [quiet] * 257
+    # pivot (1.1640 + 1.1580 + 1.1620) / 3 = 1.1613333; S1 = 2P - H = 1.1586667; R1 = 2P - L = 1.1646667
+    second = [
+        (1.1620, 1.1622, 1.1600, 1.1602),
+        (1.1602, 1.1603, 1.1585, 1.1590),  # dips to 1.1585, below S1, and closes back above it: buy
+        (1.1590, 1.1592, 1.1584, 1.1591),  # again below and back: the close before was above S1 too -> buy again
+        (1.1591, 1.1592, 1.1580, 1.1582),  # closes below S1: no signal
+        (1.1582, 1.1590, 1.1581, 1.1589),  # comes back from below: not a dip from above, no signal
+        (1.1589, 1.1650, 1.1588, 1.1640),  # pokes above R1 1.1646667 and closes back below: sell
+    ]
+    bars = bars_from(first + second, day1)
+    strategy = get_strategy("pivot_reversion")
+    sig = strategy.signals(bars, PIP)
+    assert events(sig) == [(289, 1), (290, 1), (293, -1)]
+    pivot = (1.1640 + 1.1580 + 1.1620) / 3
+    assert sig.potential_pips[289] == pytest.approx((pivot - 1.1590) / PIP)
+    assert sig.potential_pips[293] == pytest.approx((1.1640 - pivot) / PIP)
+    assert not sig.direction[:288].any()  # the first day has no day before it
+    # S2 = P - (H - L) = 1.1553: never reached; R2 = 1.1673: never reached
+    assert events(strategy.signals(bars, PIP, {"level": 2})) == []
+    # with days that end at midnight UTC the "day before" of those bars is the two quiet hours before
+    # midnight (range 1.1615 to 1.1625), and nothing in the second day is a dip to that support and back
+    other = strategy.signals(bars, PIP, {"day_end": "utc_midnight"})
+    assert [e for e in events(other) if e[0] >= 288] == []
+    assert not other.direction[:24].any()  # the hours before the first midnight have no day before them
+
+
+def test_round_number_fade_and_break_by_hand() -> None:
+    start = utc_ms(2026, 11, 11, 8, 0)
+    bars = bars_from(
+        [
+            (1.1630, 1.1634, 1.1628, 1.1632),
+            (1.1632, 1.1640, 1.1631, 1.1638),  # on the way up to 1.1650, still 10 pips short
+            (1.1638, 1.1649, 1.1637, 1.1641),  # reaches within 2 pips of 1.1650 and closes back: sell (fade)
+            (1.1641, 1.1649, 1.1640, 1.1642),  # again: but the bar before had been there already, no signal
+            (1.1642, 1.1655, 1.1641, 1.1653),  # closes through 1.1650: buy (break)
+            (1.1653, 1.1656, 1.1651, 1.1654),
+            (
+                1.1654,
+                1.1655,
+                1.1644,
+                1.1646,
+            ),  # back through 1.1650: sell (break); for the fade, the level below was 1.1650:
+            # reached and not held, but the close is below it, so it is not a fade
+            (
+                1.1646,
+                1.1647,
+                1.1601,
+                1.1606,
+            ),  # down to 1.1601, within 2 pips of 1.1600, closes above the zone: buy (fade)
+        ],
+        start,
+    )
+    strategy = get_strategy("round_number")
+    fade = strategy.signals(bars, PIP)
+    assert events(fade) == [(2, -1), (7, 1)]
+    assert fade.potential_pips[2] == 10.0 and fade.potential_pips[7] == 10.0
+    broke = strategy.signals(bars, PIP, {"mode": "break", "expect_pips": 15})
+    assert events(broke) == [(4, 1), (6, -1)] and broke.potential_pips[4] == 15.0
+    # levels every 100 pips only: 1.1650 is not one
+    assert events(strategy.signals(bars, PIP, {"step_pips": 100})) == [(7, 1)]
+    assert events(strategy.signals(bars, PIP, {"mode": "break", "step_pips": 100})) == []
+    # a close exactly on a level is on the upper side of it
+    exact = bars_from([(1.1648, 1.1649, 1.1647, 1.1648), (1.1648, 1.1650, 1.1647, 1.1650)], start)
+    assert events(strategy.signals(exact, PIP, {"mode": "break"})) == [(1, 1)]
+
+
+def test_session_drift_trades_the_clock_of_each_place() -> None:
+    strategy = get_strategy("session_drift")
+    # Wednesday 11 November 2026, winter: 08:00 in Berlin is 07:00 UTC, 08:00 in New York is 13:00 UTC
+    bars = london_day(utc_ms(2026, 11, 11, 6, 0), {}, n=120)  # five-minute bars from 06:00 to 16:00 UTC
+    sig = strategy.signals(bars, PIP)
+    # the bar from 06:55 is complete at 07:00: the sell is known then; the bar from 12:55 gives the buy
+    assert events(sig) == [(11, -1), (83, 1)]
+    assert sig.potential_pips[11] == 8.0 and sig.potential_pips[83] == 8.0
+    # Wednesday 1 July 2026, summer: Berlin 08:00 = 06:00 UTC, New York 08:00 = 12:00 UTC
+    summer = london_day(utc_ms(2026, 7, 1, 5, 0), {}, n=120)
+    assert events(strategy.signals(summer, PIP)) == [(11, -1), (83, 1)]
+    # other sessions: buy when Tokyo opens (09:00 there = 00:00 UTC), sell when London does (08:00 UTC in winter)
+    night = london_day(utc_ms(2026, 11, 10, 22, 0), {}, n=140)
+    swapped = strategy.signals(night, PIP, {"sell_session": "london", "buy_session": "tokyo", "expect_pips": 12})
+    assert events(swapped) == [(23, 1), (119, -1)] and swapped.potential_pips[23] == 12.0
+    # data that only starts after the open: the first bar is not taken for the open
+    late = london_day(utc_ms(2026, 11, 11, 7, 30), {}, n=30)
+    assert events(strategy.signals(late, PIP)) == []
+    # a hole across the open: the first bar after it comes more than an hour late, and is not an open either
+    holed = london_day(utc_ms(2026, 11, 11, 6, 0), {}, n=120)
+    keep = np.r_[0:8, 30:120]  # nothing between 06:40 and 08:30
+    cut = Bars(holed.ts[keep], holed.open[keep], holed.high[keep], holed.low[keep], holed.close[keep], 300)
+    assert [side for _, side in events(strategy.signals(cut, PIP))] == [1]  # only the New York buy is left
+
+
+def test_random_entry_is_the_same_draw_for_the_same_bar() -> None:
+    bars = random_bars(6000, 30)
+    strategy = get_strategy("random_entry")
+    sig = strategy.signals(bars, PIP)
+    got = events(sig)
+    assert 6000 / 12 * 0.7 < len(got) < 6000 / 12 * 1.3  # about one bar in twelve
+    buys = sum(1 for _, side in got if side > 0)
+    assert 0.4 < buys / len(got) < 0.6  # about half of them buys
+    assert (sig.potential_pips[sig.direction != 0] == 999.0).all()
+    # the draw belongs to the bar's time, not to its position: a series that starts later agrees
+    later = Bars(bars.ts[777:], bars.open[777:], bars.high[777:], bars.low[777:], bars.close[777:], 300)
+    assert np.array_equal(strategy.signals(later, PIP).direction, sig.direction[777:])
+    assert events(strategy.signals(bars, PIP, {"seed": 2})) != got
+    assert len(events(strategy.signals(bars, PIP, {"every": 1}))) == 6000

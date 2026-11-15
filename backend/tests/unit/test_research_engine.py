@@ -385,6 +385,24 @@ def test_a_signal_must_see_enough_potential_after_the_spread() -> None:
     assert out.counters == {"signals": 1, "traded": 0, "skipped: potential below the minimum": 1}
 
 
+def test_what_became_of_each_signal_is_recorded_in_order() -> None:
+    base = bars([flat(1.1000)] * 12)
+    sig = signals(12, {0: (1, 20.0), 1: (-1, 20.0), 2: (1, 2.0), 5: (-1, 20.0), 11: (1, 20.0)})
+    out = run(base, base, sig, replace(ONE, max_hold_minutes=3, long=True))
+    # bar 0: traded (14:01 to 14:04); bar 1: a position is open; bar 2: sees too little; bar 5: traded; bar 11: no bar left
+    assert out.decisions == [
+        (0, "traded"),
+        (1, "skipped: a position was open or cooling down"),
+        (2, "skipped: potential below the minimum"),
+        (5, "traded"),
+        (11, "skipped: no price after the signal"),
+    ]
+    assert [d for d in out.decisions if d[1] == "traded"] == [(0, "traded"), (5, "traded")] and len(out.trades) == 2
+    assert out.trades[0].signal_ms == T0 + MINUTE_MS and out.trades[1].signal_ms == T0 + 6 * MINUTE_MS
+    counted = {reason: sum(1 for _, r in out.decisions if r == reason) for _, reason in out.decisions}
+    assert counted == {k: v for k, v in out.counters.items() if k != "signals"}
+
+
 def test_directions_can_be_switched_off() -> None:
     base = bars([flat(1.1000)] * 4)
     sig = signals(4, {0: (1, 20.0), 2: (-1, 20.0)})
