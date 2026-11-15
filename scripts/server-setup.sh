@@ -19,7 +19,9 @@ fail() {
   exit 1
 }
 
-[ -f docker-compose.yml ] && [ -f .env.example ] || fail "run this from the fx-signal-lab folder"
+if [ ! -f docker-compose.yml ] || [ ! -f .env.example ]; then
+  fail "run this from the fx-signal-lab folder"
+fi
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -45,7 +47,9 @@ if ! docker info >/dev/null 2>&1; then
   $DOCKER info >/dev/null 2>&1 || fail "the Docker daemon is not running (try: $SUDO systemctl start docker)"
   if [ -n "$SUDO" ] && [ -n "${USER:-}" ]; then
     # so that later commands (make verify, docker compose logs) work without sudo
-    $SUDO usermod -aG docker "$USER" 2>/dev/null && NEEDS_RELOGIN=1
+    if $SUDO usermod -aG docker "$USER" 2>/dev/null; then
+      NEEDS_RELOGIN=1
+    fi
   fi
 fi
 

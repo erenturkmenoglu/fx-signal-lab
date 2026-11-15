@@ -64,8 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck scripts/server-setup.sh
       - run: cp .env.example .env
+      - run: shellcheck scripts/server-setup.sh .github/wait-ready.sh
       - run: docker compose config --quiet
       - name: Build and start without an API key
         run: docker compose up -d --build
@@ -110,7 +110,8 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: |
-          docker compose ps
-          docker compose logs --tail 120
-      - if: always()
-        run: docker compose down -v
+          docker compose ps || true
+          docker compose logs --tail 120 || true
+      - name: Clean up
+        if: always()
+        run: docker compose down -v || true
