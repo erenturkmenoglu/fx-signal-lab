@@ -20,6 +20,8 @@ Three things have never been executed:
 Everything else was executed, including the database layer on TimescaleDB 2.26.1, the
 version of the pinned image.
 
+Items 2 and 3 have changed since this report was written; see the addendum at the end.
+
 One command turns the first item from "unverified" into a report:
 `make verify` (it runs `fxlab verify-provider` with your key). It needs a Massive
 **Currencies Starter** plan and an open market (Sunday 17:00 to Friday 17:00 New York).
@@ -353,3 +355,24 @@ the existing chart. It needs a few days of collected data or downloaded provider
 6. Will anything below one minute be traded? If not, the 5 s to 30 s bars can go.
 7. USD/TRY, USD/ZAR, USD/PLN: availability and quote quality on Massive are unknown
    until `verify-provider` runs.
+
+## 12. Addendum, 15 November 2026
+
+What changed after this report was written:
+
+* **CI has run and passes.** On GitHub's runners: the backend suite against the
+  `timescale/timescaledb:2.26.1-pg16` image, the dashboard checks, and a new job that
+  builds the Docker image and runs the Compose stack twice. Without an API key the
+  stack reports "not configured", TimescaleDB is active with no policy errors, and
+  nothing is collected. On the simulator, quotes flow into the separate mock database
+  and the market-data database stays empty; a restart logs no error.
+* **So items 2 and 3 of section 1 are no longer "never executed"**, and risk 2 of
+  section 8 is reduced to "not yet run on the target server".
+* **Item 1 is unchanged.** Nothing has run against Massive. A Currencies Starter key
+  now exists, but the build environment has no network route to Massive, so the key
+  can only be used on the server.
+* **Decisions:** trading below one minute is intended, so all sub-minute bars stay;
+  the dashboard is wanted on a phone, which [DEPLOY.md](DEPLOY.md) covers with a
+  private network instead of a public address.
+* **New:** `scripts/server-setup.sh` (first-time setup of a server) and
+  [DEPLOY.md](DEPLOY.md).

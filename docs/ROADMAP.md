@@ -6,14 +6,17 @@ is built on the previous one without restructuring it.
 
 ## Phase 1: foundation and data infrastructure (done, pending live verification)
 
-Delivered; see [PHASE1_REPORT.md](PHASE1_REPORT.md). Close-out work that needs you:
+Delivered; see [PHASE1_REPORT.md](PHASE1_REPORT.md). Since 15 November 2026 the
+repository is on GitHub and CI passes: the backend suite on the TimescaleDB image, the
+dashboard, the Docker image build and a run of the Compose stack without a key and on
+the simulator.
 
-1. Push the repository to GitHub so the CI workflow runs once (it has never run).
-2. Set up the server ([DEPLOY.md](DEPLOY.md)). This is also the first build of the
-   Docker image.
-3. Run `make verify` there with the Massive key, once at any time and once during market
+Close-out work that needs you:
+
+1. Set up the server ([DEPLOY.md](DEPLOY.md)).
+2. Run `make verify` there with the Massive key, once at any time and once during market
    hours, and keep both reports.
-4. Let the system collect for a few days; calibrate `max_spread_pips`, `max_jump_pct`
+3. Let the system collect for a few days; calibrate `max_spread_pips`, `max_jump_pct`
    and `stale_after_ms` for EUR/USD from the reject counters.
 
 ## Phase 2: indicator engine

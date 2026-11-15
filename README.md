@@ -7,9 +7,10 @@ indicators, backtests strategies and raises signals for a discretionary trader.
 **It is not a trading bot.** It places no orders and has no broker connection. The human
 makes every trading decision.
 
-**Status: Phase 1 of 8 (data infrastructure).** Read
+**Status: Phase 1 of 8 (data infrastructure).** Built, tested, and passing CI including
+a run of the Docker stack. Not yet run against Massive itself. Read
 [docs/PHASE1_REPORT.md](docs/PHASE1_REPORT.md) first: it says exactly what was built,
-what was tested, and what still has to be verified against Massive with a real API key.
+what was tested, and what still has to be verified with a real API key.
 
 ## What Phase 1 does
 
