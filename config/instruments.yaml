@@ -37,7 +37,7 @@ defaults:
     soft_future_skew_ms: 1500    # source timestamp ahead of local clock: accept but flag clock skew
     hard_future_skew_ms: 60000   # ... beyond this: reject (future_timestamp)
 
-  costs:                         # PROVISIONAL research defaults, used from Phase 3 on
+  costs:                         # PROVISIONAL defaults for backtests; a test can override them
     assumed_spread_pips: 1.0
     slippage_pips: 0.1
     commission_per_million: 0.0
@@ -53,7 +53,9 @@ instruments:
     pip_size: 0.0001
     price_precision: 5
     active: true
-    costs: {assumed_spread_pips: 0.8}
+    # Owner's trading assumptions (15 Nov 2026): the venue quotes about 0.5 pips and charges no
+    # commission; backtests assume 1.0 pip to stay on the safe side.  No extra slippage on top.
+    costs: {assumed_spread_pips: 1.0, slippage_pips: 0.0, commission_per_million: 0.0}
 
   # --- planned pairs (inactive; provider support unverified) -------------------
   - symbol: GBPUSD

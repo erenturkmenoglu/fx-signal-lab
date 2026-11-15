@@ -66,6 +66,12 @@ class HistoryService:
     def available(self) -> bool:
         return self._rest is not None
 
+    @staticmethod
+    def max_range_ms(timeframe: str) -> int:
+        """The longest range one job may cover for this timeframe."""
+        get_timeframe(timeframe)
+        return MAX_RANGE_MS[TIMEFRAME_TO_RANGE[timeframe][1]]
+
     def validate(self, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> None:
         if self._rest is None:
             raise HistoryRequestError("historical retrieval needs the Massive REST API (not available in this mode)")

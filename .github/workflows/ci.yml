@@ -167,6 +167,36 @@ jobs:
           docker compose exec -T app python -m fxlab.cli gaps scan | grep -q queued
           ./scripts/set-password.sh --remove
           curl -fsS -o /dev/null http://127.0.0.1:8000/api/status
+      - name: A backtest runs in the container on stored history
+        run: |
+          # four weeks of one-minute provider bars (a slow wave with a faster one on top).  No result on
+          # them means anything; they are rows of the kind a history download writes.
+          docker compose exec -T db psql -U fxlab -d fxlab_mock -v ON_ERROR_STOP=1 -qc "
+            insert into bars (instrument_id, timeframe, source, ts, open, high, low, close, price_basis)
+            select (select id from instruments where symbol = 'EURUSD'), '1m', 'massive_agg', ts,
+                   round(p::numeric, 5), round((p + 0.0002)::numeric, 5), round((p - 0.0002)::numeric, 5),
+                   round((p + 0.0001)::numeric, 5), 'bid'
+            from (select ts, 1.16 + 0.004 * sin(extract(epoch from ts) / 3000) + 0.0015 * sin(extract(epoch from ts) / 400) as p
+                  from generate_series('2026-10-05 00:00+00'::timestamptz, '2026-10-30 20:59+00', interval '1 minute') ts
+                  where extract(isodow from ts at time zone 'UTC') < 6) wave"
+          make strategies | grep -q '^rsi_reversion '
+          make backtest ARGS="--strategy bollinger_reversion --days 3" | tee backtest.txt
+          grep -q '^Bollinger reversion on EURUSD, 5m bars (trades simulated on 1m bid bars)' backtest.txt
+          grep -q '20 trading days, 28,620 bars' backtest.txt
+          docker compose exec -T app python -m fxlab.cli backtest --strategy rsi_reversion --json > backtest.json
+          python3 -c "
+          import json
+          r = json.load(open('backtest.json'))
+          assert r['data']['price_basis'] == 'bid' and r['data']['base_bars'] == 28620, r['data']
+          assert r['summary']['trades'] > 10 and r['signals']['signals'] > 50, (r['summary']['trades'], r['signals'])
+          assert 'in_sample' in r and 'out_of_sample' in r and 'without_adding' in r, sorted(r)
+          assert all(t['entry_price'] < 2 for t in r['trades']), 'a price that is not from the provider bars'
+          print('ok:', r['summary']['trades'], 'trades on', r['data']['trading_days'], 'days')"
+          # nothing stored for an instrument: the command says what to download and fails
+          if docker compose exec -T app python -m fxlab.cli backtest --strategy rsi_reversion --symbol USDJPY 2> refused.txt; then
+            echo "a backtest without history did not fail"; exit 1
+          fi
+          grep -q 'no 1m history of USDJPY is stored. Download it first: fxlab history' refused.txt
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: Logs on failure

@@ -12,12 +12,14 @@ thin slice through Phases 2 to 4, and the rest afterwards.
 
 1. **Access** (done): a password login and an address that opens in any browser
    ([DEPLOY.md](DEPLOY.md), step 5).
-2. **Backtest engine:** the first strategies of the specification (RSI reversion,
-   Bollinger reversion, EMA momentum, session breakout), each with entries, exits,
-   stop-loss and take-profit. Spread, slippage and a reaction delay are parameters.
-   Positions are opened and closed within the day; the result is the daily profit and
-   loss for a chosen capital. No future information; when stop and target fall into the
-   same bar, the worse outcome counts. Only the indicators these strategies need.
+2. **Backtest engine** (done, not yet run on real history; [BACKTEST.md](BACKTEST.md)):
+   the first strategies of the specification (RSI reversion, Bollinger reversion, EMA
+   momentum, session breakout), each with entries, exits, stop-loss and take-profit.
+   Spread, slippage and a reaction delay are parameters. Positions are opened and closed
+   within the day; the result is the daily profit and loss for a chosen clip size. No
+   future information; when stop and target fall into the same bar, the worse outcome
+   counts. Only the indicators these strategies need. Run from the command line
+   (`make backtest`).
 3. **Strategy lab screen:** strategy and parameters; the chart with entry, exit, stop
    and target marks; equity curve, daily profit and loss, trade list. In-sample and
    out-of-sample results are shown apart.

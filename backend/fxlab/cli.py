@@ -6,7 +6,9 @@
     fxlab migrate                    apply database migrations
     fxlab verify-provider            probe what the configured Massive key can really do
     fxlab instruments                show the instrument registry
-    fxlab history --symbol EURUSD --timeframe 1m --start 2026-11-01 --end 2026-11-08
+    fxlab history --symbol EURUSD --timeframe 1m --start 2026-01-01 --end 2026-11-14
+    fxlab strategies                 the strategies a backtest can run, with their parameters
+    fxlab backtest --strategy rsi_reversion --start 2026-01-01 --end 2026-11-14
     fxlab gaps list | scan | fill --id N
     fxlab reconcile --minutes 10     compare live ticks with the provider's quote history
     fxlab hash-password              turn a dashboard password into the hash for DASHBOARD_PASSWORD_HASH
@@ -138,21 +140,138 @@ def cmd_history(settings: Settings, args: argparse.Namespace) -> int:
             history = HistoryService(
                 engine=engine, registry=registry, rest=rest, instrument_ids=ids, clock=SystemClock()
             )
-            job_id = await history.create_job(
-                args.symbol.upper(), args.timeframe, parse_time(args.start), parse_time(args.end)
-            )
-            return await history.run_job(job_id)
+            symbol, timeframe = args.symbol.upper(), args.timeframe
+            start_ms, end_ms = parse_time(args.start), parse_time(args.end)
+            history.validate(symbol, timeframe, start_ms, min(end_ms, start_ms + 1))  # everything but the length
+            if end_ms <= start_ms:
+                raise ValueError("end must be after start")
+            # one job covers a limited range (a guard for the dashboard): a longer one becomes several
+            step = history.max_range_ms(timeframe)
+            jobs = []
+            for chunk_start in range(start_ms, end_ms, step):
+                job_id = await history.create_job(symbol, timeframe, chunk_start, min(chunk_start + step, end_ms))
+                jobs.append(await history.run_job(job_id))
+                if jobs[-1]["status"] != "done":
+                    break
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start": iso(start_ms),
+                "end": iso(end_ms),
+                "status": "done" if all(j["status"] == "done" for j in jobs) else "failed",
+                "rows_written": sum(j["rows_written"] for j in jobs),
+                "jobs": jobs,
+            }
         finally:
             await rest.aclose()
             await engine.dispose()
 
     try:
-        job = asyncio.run(run())
+        result = asyncio.run(run())
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(job, indent=2))
-    return 0 if job["status"] == "done" else 1
+    print(json.dumps(result, indent=2))
+    return 0 if result["status"] == "done" else 1
+
+
+def cmd_strategies(_settings: Settings, args: argparse.Namespace) -> int:
+    from fxlab.research.strategies import STRATEGIES
+
+    if args.json:
+        print(json.dumps([s.describe() for s in STRATEGIES.values()], indent=2))
+        return 0
+    for strategy in STRATEGIES.values():
+        print(f"{strategy.key}  ({strategy.title}; usually on {strategy.timeframe} bars)")
+        print(f"    {strategy.summary}")
+        for p in strategy.params:
+            limits = f"one of {', '.join(p.choices)}" if p.choices else f"{p.minimum:g} to {p.maximum:g}"
+            print(f"    -p {p.name}={p.default!s:8} {p.label} ({limits})" + (f" - {p.help}" if p.help else ""))
+        print()
+    return 0
+
+
+def _pairs(items: list[str] | None, what: str) -> dict[str, str]:
+    """``name=value`` arguments as a dictionary."""
+    out: dict[str, str] = {}
+    for item in items or []:
+        name, sep, value = item.partition("=")
+        if not sep or not name.strip():
+            raise ValueError(f"{what} are given as name=value, not {item!r}")
+        out[name.strip()] = value.strip()
+    return out
+
+
+def _read_request(source: str) -> dict[str, Any]:
+    """A backtest request as JSON, from a file or from standard input (``-``)."""
+    from pathlib import Path
+
+    from fxlab.research.report import BacktestError
+
+    try:
+        text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+        data = json.loads(text)
+    except OSError as exc:
+        raise BacktestError(f"cannot read the request: {exc}") from None
+    except json.JSONDecodeError as exc:
+        raise BacktestError(f"the request is not valid JSON: {exc}") from None
+    if not isinstance(data, dict):
+        raise BacktestError("the request must be a JSON object")
+    return data
+
+
+def cmd_backtest(settings: Settings, args: argparse.Namespace) -> int:
+    from fxlab.research.report import BacktestError, BacktestRequest, format_report
+    from fxlab.services.backtest import history_inventory, run_backtest
+    from fxlab.storage.db import make_engine
+
+    registry = _registry(settings)
+    as_json = args.json or args.request is not None
+
+    async def run(given: dict[str, Any] | None) -> dict[str, Any]:
+        engine = make_engine(settings.database_url)
+        try:
+            data = given
+            if data is None:
+                if not args.strategy:
+                    raise BacktestError("--strategy is required (see: fxlab strategies)")
+                active = registry.active()
+                symbol = (args.symbol or (active[0].symbol if active else "")).upper()
+                start, end = args.start, args.end
+                if start is None or end is None:  # no period given: everything that is stored
+                    stored = {h["timeframe"]: h for h in await history_inventory(engine, symbol)}.get(args.base)
+                    if stored is None:
+                        raise BacktestError(
+                            f"no {args.base} history of {symbol} is stored. Download it first: "
+                            f"fxlab history --symbol {symbol} --timeframe {args.base} --start ... --end ..."
+                        )
+                    start = start or stored["first"]
+                    end = end or parse_time(stored["last"]) + 60_000
+                data = {
+                    "symbol": symbol,
+                    "strategy": args.strategy,
+                    "start": start,
+                    "end": end,
+                    "timeframe": args.timeframe,
+                    "base_timeframe": args.base,
+                    "params": _pairs(args.param, "parameters"),
+                    "execution": _pairs(args.set, "settings"),
+                    "split": args.split,
+                }
+            return await run_backtest(engine, registry, BacktestRequest.from_mapping(data))
+        finally:
+            await engine.dispose()
+
+    try:
+        report = asyncio.run(run(_read_request(args.request) if args.request is not None else None))
+    except ValueError as exc:  # BacktestError included: the request cannot be run as asked
+        if as_json:
+            print(json.dumps({"error": str(exc)}))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(report) if as_json else format_report(report, trades=args.trades, days=args.days))
+    return 0
 
 
 def cmd_reconcile(settings: Settings, args: argparse.Namespace) -> int:
@@ -276,6 +395,38 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--start", required=True, help="ISO-8601 or epoch")
     history.add_argument("--end", required=True, help="ISO-8601 or epoch")
     history.set_defaults(func=cmd_history)
+
+    strategies = sub.add_parser("strategies", help="list the strategies a backtest can run, with their parameters")
+    strategies.add_argument("--json", action="store_true")
+    strategies.set_defaults(func=cmd_strategies)
+
+    bt = sub.add_parser(
+        "backtest",
+        help="run a strategy on the stored history (read-only)",
+        description="Run a strategy on the provider's historical bars stored in the database. Reads only.",
+    )
+    bt.add_argument("--strategy", help="see: fxlab strategies")
+    bt.add_argument("--symbol", help="default: the first active instrument")
+    bt.add_argument("--start", help="ISO-8601 or epoch (default: the start of the stored history)")
+    bt.add_argument("--end", help="ISO-8601 or epoch (default: the end of the stored history)")
+    bt.add_argument("--timeframe", help="bars the strategy reads, e.g. 1m 5m 15m (default: the strategy's usual one)")
+    bt.add_argument("--base", default="1m", help="stored bars the trades are simulated on (default 1m)")
+    bt.add_argument("-p", "--param", action="append", metavar="NAME=VALUE", help="a strategy parameter (repeatable)")
+    bt.add_argument(
+        "-x",
+        "--set",
+        action="append",
+        metavar="NAME=VALUE",
+        help="a trading assumption, e.g. max_clips=1 spread_pips=0.5 target_pips=5 stop_pips=10 (repeatable)",
+    )
+    bt.add_argument(
+        "--split", default="auto", help="first out-of-sample day YYYY-MM-DD, 'auto' (the last 3 days in 10) or 'none'"
+    )
+    bt.add_argument("--trades", type=int, default=0, metavar="N", help="also list the last N trades")
+    bt.add_argument("--days", type=int, default=0, metavar="N", help="also list the last N days")
+    bt.add_argument("--json", action="store_true", help="print the whole report as JSON")
+    bt.add_argument("--request", metavar="FILE", help="read the request as JSON from FILE ('-' = standard input)")
+    bt.set_defaults(func=cmd_backtest)
 
     rec = sub.add_parser("reconcile", help="compare live ticks with the provider's quote history (read-only)")
     rec.add_argument("--symbol", help="default: the first active instrument")

@@ -7,10 +7,12 @@ indicators, backtests strategies and raises signals for a discretionary trader.
 **It is not a trading bot.** It places no orders and has no broker connection. The human
 makes every trading decision.
 
-**Status: Phase 1 of 8 (data infrastructure).** Built, tested, and passing CI including
-a run of the Docker stack. Not yet run against Massive itself. Read
-[docs/PHASE1_REPORT.md](docs/PHASE1_REPORT.md) first: it says exactly what was built,
-what was tested, and what still has to be verified with a real API key.
+**Status.** The data infrastructure (Phase 1 of 8) is built, tested, running on a server
+and checked against Massive with the market closed; live quotes are verified when the
+market next opens. [docs/PHASE1_REPORT.md](docs/PHASE1_REPORT.md) says exactly what was
+built and what is still unverified. On top of it there is now a **backtest engine** with
+four strategies ([docs/BACKTEST.md](docs/BACKTEST.md)); it has been tested on hand-written
+and random prices, not yet on real history. No strategy here is known to be profitable.
 
 ## What Phase 1 does
 
@@ -119,12 +121,15 @@ development environment (`fxlab ...`):
 | `migrate` | apply database migrations (also run automatically at container start) |
 | `verify-provider` | probe the Massive API and print a capability report |
 | `instruments` | show the instrument registry |
-| `history --symbol EURUSD --timeframe 1m --start 2026-11-01 --end 2026-11-08` | download provider bars |
+| `history --symbol EURUSD --timeframe 1m --start 2025-11-01 --end 2026-11-14` | download provider bars (long ranges are split into jobs) |
+| `strategies` | the strategies a backtest can run, with their parameters |
+| `backtest --strategy rsi_reversion --days 10` | run a strategy on the stored history (read-only); see [docs/BACKTEST.md](docs/BACKTEST.md) |
 | `gaps list`, `gaps scan`, `gaps fill --id N` | inspect and repair data gaps |
 | `reconcile --minutes 10` | compare live ticks with the provider's quote history (read-only) |
 | `hash-password` | make the value for `DASHBOARD_PASSWORD_HASH` (what `make password` runs) |
 
-`make help` lists shortcuts for the usual Docker operations, including `make backup`.
+`make help` lists shortcuts for the usual Docker operations, including `make backup`,
+`make history`, `make strategies` and `make backtest`.
 
 ## Development
 
@@ -170,7 +175,8 @@ backend/fxlab/domain        records, instrument registry, calendars, timeframes
 backend/fxlab/marketdata    adapter interfaces, Massive WebSocket + REST, mock adapter
 backend/fxlab/pipeline      normaliser, 1-second sampler, bars, latency, ingestion service
 backend/fxlab/storage       schema, repository, batch writer, data-mode guard
-backend/fxlab/services      gap recovery, history download, provider verification
+backend/fxlab/services      gap recovery, history download, provider verification, backtests on stored history
+backend/fxlab/research      indicators, strategies, the backtest engine, results (no I/O)
 backend/fxlab/api           FastAPI app (REST, live stream, dashboard files)
 backend/migrations          Alembic migrations
 backend/tests               unit and integration tests, fake Massive server
@@ -185,6 +191,7 @@ docs/                       architecture, API notes, deployment, roadmap, risks,
 * [ARCHITECTURE.md](docs/ARCHITECTURE.md): design, conventions, data model
 * [MASSIVE_API_NOTES.md](docs/MASSIVE_API_NOTES.md): verified API facts with sources
 * [DEPLOY.md](docs/DEPLOY.md): an always-on server and the dashboard on your phone
+* [BACKTEST.md](docs/BACKTEST.md): how a backtest trades, its assumptions, how to read a result
 * [RUNBOOK.md](docs/RUNBOOK.md): operating and recovering the system
 * [RISKS.md](docs/RISKS.md): technical risks and open questions
 * [ROADMAP.md](docs/ROADMAP.md): Phases 2 to 8

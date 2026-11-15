@@ -1,5 +1,6 @@
 # Convenience targets.  `make help` lists them.
-.PHONY: help up down logs ps verify reconcile password test test-backend test-frontend lint backup restore shell-db
+.PHONY: help up down logs ps verify reconcile password history strategies backtest \
+	test test-backend test-frontend lint backup restore shell-db
 
 # database that backup and restore work on (the simulator's is fxlab_mock)
 DB ?= fxlab
@@ -29,6 +30,15 @@ reconcile: ## compare live ticks with Massive's quote history; read-only, e.g. A
 
 password: ## set or change the dashboard password (asked twice, hidden); ARGS=--remove turns the login off
 	./scripts/set-password.sh $(ARGS)
+
+history: ## download provider bars, e.g. ARGS="--symbol EURUSD --timeframe 1m --start 2025-11-01 --end 2026-11-14"
+	docker compose exec -T app python -m fxlab.cli history $(ARGS)
+
+strategies: ## the strategies a backtest can run, with their parameters
+	@docker compose exec -T app python -m fxlab.cli strategies
+
+backtest: ## run a strategy on the stored history, e.g. ARGS="--strategy rsi_reversion --days 10" (docs/BACKTEST.md)
+	@docker compose exec -T app python -m fxlab.cli backtest $(ARGS)
 
 test: test-backend test-frontend ## run every test-suite
 

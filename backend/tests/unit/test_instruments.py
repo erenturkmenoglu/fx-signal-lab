@@ -30,7 +30,8 @@ def test_defaults_are_merged_and_overridable(registry: InstrumentRegistry) -> No
     assert eurusd.data_quality.stale_after_ms == 5000  # from defaults
     assert usdtry.data_quality.stale_after_ms == 60000  # overridden
     assert usdtry.data_quality.jump_confirm_quotes == 3  # untouched default survives a partial override
-    assert eurusd.costs.assumed_spread_pips == 0.8
+    assert (eurusd.costs.assumed_spread_pips, eurusd.costs.slippage_pips) == (1.0, 0.0)  # overridden
+    assert usdtry.costs.commission_per_million == 0.0  # from defaults
     assert eurusd.session.week_open.day == "sun" and eurusd.session.daily_rollover == "17:00"
 
 
