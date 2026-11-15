@@ -376,3 +376,15 @@ What changed after this report was written:
   private network instead of a public address.
 * **New:** `scripts/server-setup.sh` (first-time setup of a server) and
   [DEPLOY.md](DEPLOY.md).
+* **Server size measured.** Memory, CPU and disk of the build and of the running stack
+  were measured (figures in [DEPLOY.md](DEPLOY.md), "Server size"). A server with 2 GB
+  of memory is enough for Phases 1 and 2; the setup script adds a swap file below 4 GB,
+  and CI now runs the stack inside the memory limits of such a server.
+* **Defect found by that measurement, fixed.** The Compose file mounted the folder
+  `scripts/db-init/` over the database image's own first-start folder and so hid the
+  image's two scripts. `TIMESCALEDB_TELEMETRY=off` had no effect (the level stayed
+  `basic`), and the database ran on PostgreSQL's defaults instead of tuning itself to
+  the machine: 128 MB of cache and 8 worker processes for 16 TimescaleDB background
+  workers. Storage and policies worked regardless, which is why no test noticed. The
+  file is now mounted on its own, and CI asserts the telemetry level and the tuned
+  settings. No database volume existed outside CI, so nothing has to be migrated.

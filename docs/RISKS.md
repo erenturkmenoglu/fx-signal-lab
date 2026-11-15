@@ -31,11 +31,16 @@ Ordered by how much they matter for the next step.
    inside the application remains Phase 8.
 4. **Host.** A small cloud server on the US east coast is recommended over a home PC;
    reasons and steps are in [DEPLOY.md](DEPLOY.md). Not yet set up.
+5. **Server size.** 2 GB of memory and 60 GB of disk, after measuring (DEPLOY.md,
+   "Server size"). Larger only when backtests on the server need it; the way up is a
+   snapshot, and there is no way down.
 
 ## Open questions for you
 
 1. **Raw ticks.** 30 days of raw quotes are kept by default. Longer retention costs disk
-   (to be measured on real data) but allows exact re-simulation of fills later.
+   but allows exact re-simulation of fills later. Measured on synthetic quotes: about
+   28 MB per pair and trading day at 20 quotes a second once compressed, so about 7 GB a
+   year per pair. To be confirmed on real data.
 2. **Costs for backtests.** Which spread, commission and slippage should Phase 3 assume
    for your execution venue? The registry holds placeholders.
 3. **Reaction time.** Below one minute, the delay between a signal and your order

@@ -3,9 +3,10 @@
 #
 #   ./scripts/server-setup.sh
 #
-# It installs Docker when it is missing, writes .env (asking for the Massive API key
-# without echoing it), builds and starts the stack and waits until the application
-# answers.  Running it again is safe: an existing .env is kept and nothing is deleted.
+# It installs Docker when it is missing, adds a swap file on a server with less than 4 GB
+# of memory, writes .env (asking for the Massive API key without echoing it), builds and
+# starts the stack and waits until the application answers.  Running it again is safe:
+# an existing .env and an existing swap file are kept and nothing is deleted.
 #
 # Non-interactive use:  MASSIVE_API_KEY=... ./scripts/server-setup.sh
 set -euo pipefail
@@ -58,9 +59,78 @@ if ! command -v make >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
   $SUDO apt-get install -y -qq make >/dev/null
 fi
 
-mem_mb="$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || echo 0)"
-if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1800 ]; then
-  note "WARNING: only ${mem_mb} MB of memory. The first build may fail; 4 GB is recommended."
+# Memory.  The running stack needs about 1 GB (docs/DEPLOY.md, "Server size").  Below 4 GB
+# a swap file makes sure that an image build next to the running stack cannot exhaust it.
+SWAP_FILE=/swapfile
+SWAP_MB=2048
+
+meminfo_mb() {
+  awk -v key="$1:" '$1 == key {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || true
+}
+
+add_swap() {
+  # Creates the swap file if it is missing, turns it on and keeps it on across reboots.
+  # On failure it prints the reason and returns 1; nothing half-made is left behind.
+  local created="" free_mb
+  if [ ! -e "$SWAP_FILE" ]; then
+    free_mb="$(df -Pm / 2>/dev/null | awk 'NR == 2 {print $4}')"
+    if [ "${free_mb:-0}" -lt 8000 ]; then
+      echo "less than 8 GB of free disk space"
+      return 1
+    fi
+    if ! $SUDO fallocate -l "${SWAP_MB}M" "$SWAP_FILE" 2>/dev/null &&
+      ! $SUDO dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$SWAP_MB" status=none 2>/dev/null; then
+      $SUDO rm -f "$SWAP_FILE"
+      echo "could not create $SWAP_FILE"
+      return 1
+    fi
+    created=1
+    if ! $SUDO chmod 600 "$SWAP_FILE" || ! $SUDO mkswap "$SWAP_FILE" >/dev/null 2>&1; then
+      $SUDO rm -f "$SWAP_FILE"
+      echo "could not format $SWAP_FILE as swap"
+      return 1
+    fi
+  fi
+  if ! $SUDO swapon "$SWAP_FILE" >/dev/null 2>&1 && ! grep -q "^$SWAP_FILE " /proc/swaps 2>/dev/null; then
+    if [ -n "$created" ]; then
+      $SUDO rm -f "$SWAP_FILE"
+    fi
+    echo "this system did not accept $SWAP_FILE as swap"
+    return 1
+  fi
+  if ! grep -Eq "^${SWAP_FILE}[[:space:]]" /etc/fstab 2>/dev/null; then
+    if ! printf '%s none swap sw 0 0\n' "$SWAP_FILE" | $SUDO tee -a /etc/fstab >/dev/null; then
+      echo "swap is on now, but /etc/fstab could not be changed: it will be off after a reboot"
+      return 1
+    fi
+  fi
+  # Swap is for emergencies: keep the application and the database in memory.
+  if printf 'vm.swappiness = 10\n' | $SUDO tee /etc/sysctl.d/60-fxlab-swap.conf >/dev/null 2>&1; then
+    $SUDO sysctl -q -w vm.swappiness=10 >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+mem_mb="$(meminfo_mb MemTotal)"
+mem_mb="${mem_mb:-0}"
+swap_mb="$(meminfo_mb SwapTotal)"
+swap_mb="${swap_mb:-0}"
+if [ "$mem_mb" -ge 3500 ]; then
+  note "memory: ${mem_mb} MB"
+elif [ "$mem_mb" -gt 0 ] && [ "$swap_mb" -ge 1000 ]; then
+  note "memory: ${mem_mb} MB, swap: ${swap_mb} MB"
+elif [ "$mem_mb" -gt 0 ]; then
+  if reason="$(add_swap)"; then
+    note "memory: ${mem_mb} MB, plus a $((SWAP_MB / 1024)) GB swap file ($SWAP_FILE, kept across reboots),"
+    note "so that a build next to the running stack cannot run out of memory."
+  else
+    note "WARNING: ${mem_mb} MB of memory and no swap file (${reason:-unknown reason})."
+    note "         A build while the stack is running may run out of memory."
+  fi
+fi
+if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1700 ]; then
+  note "WARNING: less than 2 GB of memory. The stack starts, but the system, the database"
+  note "         and the application leave almost nothing free. 2 GB is the tested minimum."
 fi
 if command -v timedatectl >/dev/null 2>&1; then
   if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" = "yes" ]; then

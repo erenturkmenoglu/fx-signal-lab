@@ -20,7 +20,9 @@ services:
       TIMESCALEDB_TELEMETRY: "off"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./scripts/db-init:/docker-entrypoint-initdb.d:ro
+      # One file, not the folder: mounting a folder here would hide the image's own
+      # first-start scripts (extension set-up, TIMESCALEDB_TELEMETRY, timescaledb-tune).
+      - ./scripts/db-init/10-mock-database.sql:/docker-entrypoint-initdb.d/10-mock-database.sql:ro
     shm_size: 256mb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fxlab -d fxlab"]

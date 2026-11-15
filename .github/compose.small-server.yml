@@ -1,0 +1,17 @@
+# CI only: the Compose stack inside the memory budget of the smallest supported server
+# (2 GB memory, 2 vCPU; docs/DEPLOY.md, "Server size").
+#
+# The database tunes itself as it would on that server, and both containers get hard
+# limits.  Of the 1,900 MB such a server really has, 1,350 MB go to the two containers;
+# the rest is for Ubuntu, Docker and Tailscale.  If the project grows past this, the
+# build fails here first, before it fails on the server.
+services:
+  db:
+    environment:
+      TS_TUNE_MEMORY: 1900MB
+      TS_TUNE_NUM_CPUS: "2"
+    mem_limit: 1000m
+    memswap_limit: 1000m
+  app:
+    mem_limit: 350m
+    memswap_limit: 350m

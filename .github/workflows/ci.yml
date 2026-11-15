@@ -62,11 +62,17 @@ jobs:
     # key (nothing may be collected), once on the built-in simulator (data must flow and reach
     # the database).  No secret is needed, and Massive is never contacted.
     runs-on: ubuntu-latest
+    env:
+      # with the memory limits of the smallest supported server (see the second file)
+      COMPOSE_FILE: docker-compose.yml:.github/compose.small-server.yml
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
       - run: shellcheck scripts/server-setup.sh .github/wait-ready.sh .github/report-stack.sh .github/mem-peak.sh
-      - run: docker compose config --quiet
+      - name: Both Compose configurations are valid (the server's, and the one with CI limits)
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose config --quiet
       - name: Build and start without an API key
         run: ./.github/mem-peak.sh "first pull, build and start" docker compose up -d --build
       - name: Wait for the application
@@ -83,6 +89,13 @@ jobs:
           print('ok:', s['provider']['label'], '| timescaledb:', s['storage']['timescaledb'])"
           curl -fsS -o /dev/null http://127.0.0.1:8000/
           test "$(docker compose exec -T db psql -U fxlab -d fxlab -Atc 'select count(*) from obs_1s')" = "0"
+      - name: The database ran its own first-start scripts (telemetry off, tuned for 2 GB)
+        run: |
+          settings="$(docker compose exec -T db psql -U fxlab -d fxlab -Atc "
+            select string_agg(name || '=' || current_setting(name), ' ' order by name) from pg_settings
+            where name in ('max_connections', 'max_worker_processes', 'shared_buffers', 'timescaledb.telemetry_level')")"
+          echo "$settings"
+          test "$settings" = "max_connections=25 max_worker_processes=21 shared_buffers=475MB timescaledb.telemetry_level=off"
       - name: Restart on the simulator (its own database)
         run: |
           sed -i -e 's/^DATA_PROVIDER=.*/DATA_PROVIDER=mock/' -e 's/^FXLAB_DB=.*/FXLAB_DB=fxlab_mock/' .env
@@ -107,10 +120,8 @@ jobs:
           docker compose restart app
           ./.github/wait-ready.sh
           test "$(docker compose logs app | grep -c '"level": "error"')" = "0"
-      - name: Memory of a rebuild next to the running stack
-        run: ./.github/mem-peak.sh "rebuild of the image with nothing cached, stack running" docker compose build --no-cache app
-      - name: Database settings and memory
-        run: ./.github/report-stack.sh
+      - name: Nothing ran out of memory inside the limits
+        run: ./.github/report-stack.sh check
       - name: Logs on failure
         if: failure()
         run: |

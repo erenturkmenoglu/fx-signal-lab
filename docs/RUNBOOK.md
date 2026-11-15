@@ -110,6 +110,22 @@ df -h                               # a full disk is the usual cause
   `PERSIST_RAW_TICKS=false` stops storing them; the 1-second grid and bars are unaffected.
 * Compression applies after `COMPRESS_AFTER_DAYS` (default 7).
 * Size per table: `docker compose exec db psql -U fxlab fxlab -c "SELECT hypertable_name, pg_size_pretty(hypertable_size(format('%I', hypertable_name)::regclass)) FROM timescaledb_information.hypertables;"`
+* What to expect per pair and day is in [DEPLOY.md](DEPLOY.md), "Server size".
+
+### Memory running short
+
+The database sizes itself once, when its volume is first created: a quarter of the
+server's memory for its cache (`SHOW shared_buffers;`), which it fills over the first
+days and then keeps. The application stays below 100 MB. Measured figures are in
+[DEPLOY.md](DEPLOY.md), "Server size".
+
+* `free -m`: the "available" column is what counts. Swap in use during normal operation
+  means the server is too small.
+* `docker stats --no-stream`: memory per container.
+* A larger server: Lightsail cannot resize in place. Take a snapshot, create a larger
+  instance from it, check it, then stop the old one. The database keeps the settings of
+  the old size; `timescaledb-tune` inside the `db` container re-computes them (not tried
+  here).
 
 ### "The application could not start: DataModeMismatchError"
 

@@ -17,7 +17,7 @@ A small cloud server, not a home PC.
 | Always on | yes | only while it never sleeps, updates or loses power or internet |
 | Distance to Massive | same coast: a few milliseconds | from Europe: on the order of 100 to 150 ms round trip |
 | Reachable from your phone | yes, see step 5 | the same way, but only while the PC is up |
-| Cost | about $24 a month | electricity |
+| Cost | about $12 a month | electricity |
 | Effort | about 15 minutes, once | Docker Desktop, power settings, router quirks |
 
 The latency figures are estimates. The dashboard shows the measured p50, p95 and p99
@@ -26,12 +26,47 @@ once quotes flow.
 Massive's servers are in Secaucus, New Jersey (Equinix NY2 and NY5), and Massive itself
 recommends hosting close to them. So choose a region on the US east coast.
 
-**Size:** 2 vCPU, 4 GB memory, 80 GB disk, Ubuntu 24.04 LTS. On Amazon Lightsail, which
-is AWS without the complexity of EC2, that is the $24 a month Linux plan in the Virginia
-region. Any provider with a US east coast region does the same job.
+**Size:** 2 vCPU, 2 GB memory, 60 GB disk, Ubuntu 24.04 LTS. On Amazon Lightsail, which
+is AWS without the complexity of EC2, that is the $12 a month Linux plan. Any provider
+with a US east coast region does the same job.
 
-4 GB is for the image build and for TimescaleDB with room to spare. 2 GB probably works
-and has not been tried.
+### Server size: what was measured
+
+Measured on 15 November 2026 with quotes from the local test provider and from the
+simulator, not from Massive. How many quotes a second Massive sends for EUR/USD is not
+known yet, so three rates were used. The disk figures come from synthetic quotes shaped
+like EUR/USD; real quotes may compress better or worse.
+
+| | Measured |
+|---|---|
+| Application | 65 to 95 MB; the same at 5, 20 and 50 quotes a second and with three pairs |
+| Database | 530 MB once its cache has filled (it takes a quarter of the memory by design), 50 to 70 MB right after a start |
+| Docker itself | about 185 MB |
+| Image build next to the running stack | about 375 MB at its peak (about 550 MB for the very first build, which also downloads the images) |
+| CPU, application and database together | 1.3% of one core at 5 quotes a second, 2.0% at 20, 3.0% at 50 |
+| Disk per pair and trading day | ticks: 108 bytes a quote (45 MB at 5 a second, 178 MB at 20), about a sixth of that once compressed after 7 days. 1-second grid: 13 MB, then 2.9 MB. Bars: 4.8 MB, then 1.1 MB |
+
+What follows for the plan:
+
+* **2 GB ($12) is enough.** Database, application and Docker need about 800 MB. Ubuntu
+  and Tailscale were not measured; with a typical 250 MB for the two, the server uses a
+  little over 1 GB of the 1.9 GB it really has, and a rebuild fits next to that. The
+  setup script still adds a 2 GB swap file on servers below 4 GB, so that a build can
+  never exhaust the memory. CI runs the stack on every push with the database limited
+  to 1,000 MB and the application to 350 MB.
+* **1 GB ($7) is not.** The database sizes itself smaller there (about 290 MB), but
+  with everything else some 800 MB of 950 MB are taken before anything is built. Every
+  update would push the running application into swap.
+* **4 GB ($24) buys memory and disk, nothing else.** The $12 and $24 plans have the same
+  two vCPUs with the same baseline of 20% each; this workload uses 1 to 3% of one.
+* **Disk is not the constraint.** One pair at 20 quotes a second settles at about
+  1.4 GB of ticks (30 days are kept) and adds about 1 GB a year for the 1-second grid
+  and the bars. Eight pairs at that rate come to about 20 GB in the first year.
+
+**When to move up:** when backtests over months of 1-second data are to run on the
+server (Phase 3), or when `free -m` shows swap in use during normal operation. Lightsail
+does not resize a server in place: you take a snapshot and create a larger instance
+from it. That works upwards only, which is the reason to start small.
 
 ### If your AWS account is new
 
@@ -59,7 +94,8 @@ Settings, Billing, Upgrade); unused credit still counts.
 3. Platform: **Linux operating system** (older consoles: **Linux/Unix**, then
    **OS Only**). Blueprint: **Ubuntu 24.04 LTS**. Not one of the app blueprints such as
    WordPress or "Plesk Hosting Stack on Ubuntu".
-4. Plan: **$24** (4 GB memory, 2 vCPUs, 80 GB SSD).
+4. Plan type **General purpose**, network type **Dual-stack**, size **$12** (2 GB
+   memory, 2 vCPUs, 60 GB SSD). Why this size: "Server size" above.
 5. Give it a name and create it. When it is running, open **Connect using SSH**: a
    terminal in the browser, no key files needed.
 
@@ -91,10 +127,11 @@ Answer: GitHub.com, HTTPS, Yes, **Login with a web browser**. It prints a code; 
 ./scripts/server-setup.sh
 ```
 
-The script installs Docker, asks for the Massive API key (what you type or paste stays
-hidden), generates a database password, writes both to `.env` (readable only by you),
-builds the image, starts everything and waits until the application answers. The first
-build takes a few minutes. Running the script again changes nothing that exists.
+The script installs Docker, adds a 2 GB swap file if the server has less than 4 GB of
+memory, asks for the Massive API key (what you type or paste stays hidden), generates a
+database password, writes both to `.env` (readable only by you), builds the image,
+starts everything and waits until the application answers. The first build takes a few
+minutes. Running the script again changes nothing that exists.
 
 The key lives only in `.env` on the server. It is never part of the repository.
 
@@ -174,9 +211,9 @@ For backups, also turn on automatic snapshots of the instance in the Lightsail c
 | Item | Cost |
 |---|---|
 | Massive Currencies Starter | $49 |
-| Server (Lightsail, 4 GB) | $24 |
+| Server (Lightsail, 2 GB) | $12 |
 | Tailscale, personal plan | free |
-| **Total** | **about $73** |
+| **Total** | **about $61** |
 
 ## A home PC instead
 
@@ -189,6 +226,8 @@ automatically.
 
 * [Where are Massive's servers located?](https://massive.com/knowledge-base/article/where-are-massives-servers-located)
 * [Amazon Lightsail pricing](https://aws.amazon.com/lightsail/pricing)
+* [Lightsail: baseline CPU performance of each plan](https://docs.aws.amazon.com/lightsail/latest/userguide/baseline-cpu-performance.html)
+* [Lightsail: a larger instance from a snapshot](https://docs.aws.amazon.com/lightsail/latest/userguide/how-to-create-larger-instance-from-snapshot-using-console.html)
 * [AWS: activate advanced AWS features](https://docs.aws.amazon.com/accounts/latest/reference/activate-advanced-features.html)
 * [AWS: choosing a Free Tier plan](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html)
 * [Tailscale: host a private web server with Docker](https://tailscale.com/docs/solutions/host-private-server-docker)
