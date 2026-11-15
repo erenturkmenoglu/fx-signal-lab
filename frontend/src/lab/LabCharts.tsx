@@ -132,7 +132,7 @@ export function EquityChart({
         <div className="note flex flex-wrap items-center gap-x-4 gap-y-1">
           <span className="inline-flex items-center gap-1.5">
             <span aria-hidden className="inline-block w-5 border-t-2" style={{ borderColor: INK }} />
-            as tested (up to {report.request.execution.max_clips} clips)
+            {report.request.execution.max_clips > 1 ? `as tested (up to ${report.request.execution.max_clips} clips)` : "running total"}
           </span>
           {single ? (
             <span className="inline-flex items-center gap-1.5">

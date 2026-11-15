@@ -48,7 +48,8 @@ may compress better or worse.
 | Docker itself | 170 to 185 MB |
 | Image build next to the running stack | about 375 MB at its peak (up to about 670 MB for the very first build, which also downloads the images) |
 | A backtest (a year of one-minute bars) | about 165 MB for 2 to 3 seconds, in a process of its own |
-| A signal board (71 methods on the same year) | about 210 MB for 9 seconds on the development machine, in a process of its own; a month: 115 MB for 2 seconds. Not yet timed on the server |
+| A signal board (81 methods on the same year) | about 210 MB for 8 seconds on the development machine, in a process of its own; a month: 115 MB for 2 seconds. Not yet timed on the server |
+| A setup (two methods on the same year, with the momentum reading of all 40 momentum methods) | about 200 MB for 5 seconds on the development machine, in a process of its own; a month: 110 MB for 2 seconds. The chart window of the board: 100 to 125 MB for 2 seconds |
 | CPU, application and database together | 1.3% of one core at 5 quotes a second, 2.0% at 20, 3.0% at 50 |
 | Disk per pair and trading day | ticks: 108 bytes a quote (45 MB at 5 a second, 178 MB at 20), about a sixth of that once compressed after 7 days. 1-second grid: 13 MB, then 2.9 MB. Bars: 4.8 MB, then 1.1 MB |
 

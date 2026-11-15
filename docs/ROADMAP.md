@@ -31,8 +31,17 @@ thin slice through Phases 2 to 4, and the rest afterwards.
      trading day, the trades that worked and failed, and every signal of every method on a
      chart of a day, a week or a month. Every run now reads three weeks before its period so
      that indicators have settled when it begins.
+   - **Stops, kinds of signal, the trend channel and setups** (done, same caveat). The first
+     look at results showed small wins and large losses; that came from adding to losing
+     positions, which is gone: one order per position, a stop as near as the target. Every
+     method is now classed as momentum or mean reversion; the board's chart shows what the
+     momentum methods say together (and each change of momentum), the mean-reversion signals,
+     and a trend channel, instead of single signals. A fourth page runs a rule of one's own
+     (chosen methods, any or all, a stop and a target), saves it on the server, and asks of
+     the trades that failed what was going on around them.
 4. **Live signals** from the strategy that survives, running the same code as the
-   backtest. The signal board is where they will be shown.
+   backtest. The signal board is where they will be shown; a saved setup is the natural
+   thing to watch live.
 
 Deferred until that works end to end: the wide indicator library, regime detection,
 the ensemble and multi-timeframe strategies, notifications, the paper-trading journal,

@@ -45,7 +45,18 @@ async def test_the_lab_describes_what_can_be_tested(lab: tuple[AppServer, Bars])
             "ema_momentum",
             "session_breakout",
         ]
-        assert len(described["strategies"]) == 15 and described["strategies"][-1]["key"] == "random_entry"
+        assert len(described["strategies"]) == 17 and described["strategies"][-1]["key"] == "random_entry"
+        assert sum(1 for s in described["strategies"] if s["style"] == "momentum") == 8
+        assert sum(1 for s in described["strategies"] if s["style"] == "reversion") == 7
+        # what a failed trade can be asked about: three things known when it was opened, two seen afterwards
+        assert [(c["key"], c["when"]) for c in described["conditions"]] == [
+            ("against_momentum", "entry"),
+            ("against_channel", "entry"),
+            ("outside_channel", "entry"),
+            ("momentum_turned", "after"),
+            ("left_channel", "after"),
+        ]
+        assert all(c["label"] for c in described["conditions"])
         assert {s["family"] for s in described["strategies"]} >= {"reversion", "trend", "breakout", "level", "time"}
         rsi = described["strategies"][0]
         assert rsi["timeframe"] == "5m" and rsi["params"][0] == {

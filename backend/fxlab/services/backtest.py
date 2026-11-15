@@ -2,21 +2,27 @@
 
 Backtests read the provider's historical bars (``source = massive_agg``, bid prices) and
 nothing else: never the live series, never anything synthetic.  They only read.
+
+The one thing written here is the list of saved setups (the owner's own rules): names and
+settings, never prices or results.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from fxlab.domain.instruments import InstrumentRegistry
 from fxlab.domain.timeframes import TIMEFRAMES, Timeframe, get_timeframe
 from fxlab.research.bars import PROVIDER_SOURCE, Bars, load_provider_bars
 from fxlab.research.board import BoardRequest, Progress, build_board, prepare_board, window_signals
+from fxlab.research.context import CONDITIONS
 from fxlab.research.report import BacktestError, BacktestRequest, build_report, default_execution, prepare
+from fxlab.research.setups import SetupRequest, build_setup, prepare_setup
 from fxlab.research.strategies import STRATEGIES
+from fxlab.storage import repo
 from fxlab.storage import schema as s
 from fxlab.timeutil import DAY_MS, dt_to_ms, iso, ms_to_dt
 
@@ -77,6 +83,8 @@ async def describe_lab(engine: AsyncEngine, registry: InstrumentRegistry, symbol
         "price_precision": inst.price_precision,
         "session_tz": inst.session.tz,
         "execution": {name: getattr(ex, name) for name in ex.__dataclass_fields__},
+        # what can be said about a trade from what the market was doing around it
+        "conditions": [{"key": key, "label": label, "when": when} for key, label, when in CONDITIONS],
         "history": await history_inventory(engine, symbol),
     }
 
@@ -186,3 +194,99 @@ async def run_window(engine: AsyncEngine, registry: InstrumentRegistry, request:
     # with the run-in before the window come the bars of a day after it, for its last trades to finish
     bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms, request.end_ms, tail_ms=DAY_MS)
     return window_signals(bars, inst, request)
+
+
+# --- setups: the owner's own rules -------------------------------------------------------------
+
+#: where saved setups are kept in ``app_meta``
+SETUPS_KEY = "setups"
+#: what a saved setup consists of (the period and the instrument belong to a run, not to the setup)
+SETUP_FIELDS = ("name", "methods", "mode", "within_minutes", "skip", "execution")
+MAX_SETUPS = 50
+#: the number writers of the saved setups queue on (a transaction-level advisory lock of the database)
+SETUPS_LOCK = 0x5E70A5
+
+
+def check_setup(registry: InstrumentRegistry, request: SetupRequest) -> None:
+    """Everything that can be said about a setup request without reading data."""
+    if request.symbol not in registry:
+        raise BacktestError(f"unknown instrument {request.symbol!r}")
+    if request.end_ms <= request.start_ms:
+        raise BacktestError("end must be after start")
+    if request.end_ms - request.start_ms > MAX_RANGE_MS:
+        raise BacktestError(f"one run covers at most {MAX_RANGE_MS // DAY_MS} days")
+    prepare_setup(registry.get(request.symbol), request)
+
+
+async def run_setup(engine: AsyncEngine, registry: InstrumentRegistry, request: SetupRequest) -> dict[str, Any]:
+    """A setup on the stored history of a period, with every trade described by what was going on around it."""
+    check_setup(registry, request)
+    inst = registry.get(request.symbol)
+    base_tf = prepare_setup(inst, request).base_tf
+    bars = await _stored_bars(engine, request.symbol, base_tf, request.start_ms, request.end_ms)
+    return build_setup(bars, inst, request)
+
+
+def setup_definition(registry: InstrumentRegistry, symbol: str, data: dict[str, Any]) -> dict[str, Any]:
+    """What is kept of a setup, checked the way a run would check it.  Raises ``BacktestError``."""
+    unknown = sorted(set(data) - set(SETUP_FIELDS))
+    if unknown:
+        raise BacktestError(f"unknown field {unknown[0]!r}; a setup has: {', '.join(SETUP_FIELDS)}")
+    request = SetupRequest.from_mapping({**data, "symbol": symbol, "start": "2000-01-03", "end": "2000-01-04"})
+    if symbol not in registry:
+        raise BacktestError(f"unknown instrument {symbol!r}")
+    prepare_setup(registry.get(symbol), request)
+    return {
+        "name": request.name,
+        "methods": list(request.methods),
+        "mode": request.mode,
+        "within_minutes": request.within_minutes,
+        "skip": list(request.skip),
+        "execution": request.execution,
+    }
+
+
+async def _one_writer(conn: AsyncConnection) -> None:
+    """Saved setups are one stored value, read and written whole: writers take turns (until the transaction ends)."""
+    await conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SETUPS_LOCK})
+
+
+async def list_setups(engine: AsyncEngine) -> list[dict[str, Any]]:
+    """The saved setups, in the order they were first saved."""
+    async with engine.connect() as conn:
+        stored = await repo.get_meta(conn, SETUPS_KEY)
+    return list((stored or {}).get("items", []))
+
+
+async def save_setup(
+    engine: AsyncEngine, registry: InstrumentRegistry, symbol: str, data: dict[str, Any], now_ms: int
+) -> dict[str, Any]:
+    """Keep a setup under its name: a new name is a new setup, a known name is replaced."""
+    definition = setup_definition(registry, symbol, data)
+    async with engine.begin() as conn:
+        await _one_writer(conn)
+        stored = await repo.get_meta(conn, SETUPS_KEY) or {"next_id": 1, "items": []}
+        items = list(stored.get("items", []))
+        match = next((item for item in items if item["name"].lower() == definition["name"].lower()), None)
+        if match is None:
+            if len(items) >= MAX_SETUPS:
+                raise BacktestError(f"{MAX_SETUPS} setups are saved already; delete one first")
+            match = {"id": int(stored.get("next_id", 1))}
+            stored["next_id"] = match["id"] + 1
+            items.append(match)
+        match.update(definition, updated_ms=now_ms)
+        stored["items"] = items
+        await repo.set_meta(conn, SETUPS_KEY, stored)
+    return dict(match)
+
+
+async def delete_setup(engine: AsyncEngine, setup_id: int) -> bool:
+    async with engine.begin() as conn:
+        await _one_writer(conn)
+        stored = await repo.get_meta(conn, SETUPS_KEY) or {"next_id": 1, "items": []}
+        kept = [item for item in stored.get("items", []) if item["id"] != setup_id]
+        if len(kept) == len(stored.get("items", [])):
+            return False
+        stored["items"] = kept
+        await repo.set_meta(conn, SETUPS_KEY, stored)
+    return True

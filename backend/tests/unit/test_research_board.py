@@ -62,7 +62,7 @@ def test_a_board_holds_every_strategy_on_every_bar_length(result: dict) -> None:
         "reversion",
         "5m",
     )
-    assert any("29 methods were tried on the same prices" in w for w in result["warnings"])
+    assert any(f"{len(ids)} methods were tried on the same prices" in w for w in result["warnings"])
     json.dumps(result)
 
 
@@ -278,6 +278,7 @@ def test_a_window_holds_every_signal_of_every_method_once(window: dict, bars: Ba
         "short": "RSI",
         "title": "RSI reversion",
         "family": "reversion",
+        "style": "reversion",
         "timeframe": "5m",
     }
     # counted independently: the strategy's own signals whose bar closed inside the window
@@ -358,6 +359,167 @@ def test_a_window_comes_with_the_bars_to_draw_it_on(window: dict, bars: Bars) ->
     assert chart["t"][0] == utc_ms(2026, 10, 15, 6, 0) and len(chart["t"]) == 2 * 180  # two days of 15 hours
     assert all(t % (5 * MINUTE_MS) == 0 for t in chart["t"])
     assert window["run_in_from"] == iso(int(bars.ts[0])) and window["request"]["chart_timeframe"] == "5m"
+
+
+def test_a_window_says_what_momentum_and_the_trend_channel_were_bar_by_bar(window: dict, bars: Bars) -> None:
+    """Under the prices: what the momentum methods said, the mean-reversion signals, and the trend channel."""
+    context, chart, signals = window["context"], window["bars"], window["signals"]
+    n, span = len(chart["t"]), chart["seconds"] * 1000
+    styles = {m["id"]: m["style"] for m in window["methods"]}
+    voters = [m for m in window["methods"] if m["style"] == "momentum"]
+    assert context["voters"] == len(voters) == 16 and context["threshold"] == 4  # a fifth of them, rounded up
+    assert {m["strategy"] for m in voters} == {key for key, s in STRATEGIES.items() if s.style == "momentum"}
+    assert all(len(context[name]) == n for name in ("votes", "state"))
+    assert all(len(context["channel"][name]) == n for name in ("middle", "upper", "lower"))
+    assert all(len(context["reversion"][name]) == n for name in ("buys", "sells"))
+
+    # every signal is on the bar of the chart by whose close it had come
+    assert all(chart["t"][s["bar"]] < s["t"] <= chart["t"][s["bar"]] + span for s in signals)
+
+    # the reading, counted independently: each momentum method points the way of its last signal for
+    # 96 of its own bars; a bar of the chart shows what had been said by its close
+    expected = np.zeros(n, dtype=int)
+    for method in voters:
+        seconds = {"5m": 300, "15m": 900}[method["timeframe"]]
+        signal_bars = resample(bars, seconds)
+        own = STRATEGIES[method["strategy"]].signals(signal_bars, 0.0001)
+        closed = signal_bars.ts + seconds * 1000
+        for i, t in enumerate(chart["t"]):
+            done = np.flatnonzero((closed <= t + span) & (own.direction != 0))
+            if len(done) and np.count_nonzero(closed <= t + span) - 1 - done[-1] < 96:
+                expected[i] += int(own.direction[done[-1]])
+    assert context["votes"] == expected.tolist()
+    assert min(context["votes"]) <= -context["threshold"] and max(context["votes"]) >= context["threshold"]
+
+    # the state: up once four more point up than down, and so it stays until four more point down
+    state = context["state"]
+    assert set(state) == {1, -1}
+    for i in range(1, n):
+        if context["votes"][i] >= 4:
+            assert state[i] == 1
+        elif context["votes"][i] <= -4:
+            assert state[i] == -1
+        else:
+            assert state[i] == state[i - 1]
+    turns = [i for i in range(1, n) if state[i] != state[i - 1]]
+    assert [c["bar"] for c in context["changes"]] == turns == [10, 41, 195]
+    assert all(c["to"] == state[c["bar"]] and c["t"] == chart["t"][c["bar"]] + span for c in context["changes"])
+    # each change carries the reading that made it and the price of that moment
+    assert all(c["votes"] == context["votes"][c["bar"]] and abs(c["votes"]) >= 4 for c in context["changes"])
+    assert all(c["votes"] * c["to"] > 0 and c["price"] == chart["c"][c["bar"]] for c in context["changes"])
+
+    # mean-reversion signals: the buys and the sells of each bar
+    for name, d in (("buys", 1), ("sells", -1)):
+        counted = [0] * n
+        for sig in signals:
+            if styles[sig["method"]] == "reversion" and sig["d"] == d:
+                counted[sig["bar"]] += 1
+        assert context["reversion"][name] == counted and sum(counted) > 20
+
+    # the trend channel: a line through the day of five-minute closes before each bar, drawn on to it
+    five = resample(bars, 300)
+    channel = context["channel"]
+    assert (channel["hours"], channel["width"]) == (24.0, 2.0)
+    for i in (0, 57, n - 1):
+        k = int(np.searchsorted(five.ts, chart["t"][i]))
+        assert five.ts[k] == chart["t"][i]
+        before = five.close[k - 288 : k]
+        slope, level = np.polyfit(np.arange(288), before, 1)
+        spread = float(np.std(before - (level + slope * np.arange(288))))
+        assert channel["middle"][i] == pytest.approx(level + slope * 288, abs=6e-7)
+        assert channel["upper"][i] - channel["middle"][i] == pytest.approx(2 * spread, abs=2e-6)
+        assert channel["middle"][i] - channel["lower"][i] == pytest.approx(2 * spread, abs=2e-6)
+    json.dumps(window)
+
+
+def test_the_context_of_a_window_follows_the_bars_of_its_chart(bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
+    """Whatever bars are drawn, a bar shows what was known when it closed."""
+    five = window_signals(bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["5m", "15m"]))
+    for code, seconds in (("1m", 60), ("30m", 1800)):
+        other = window_signals(
+            bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["5m", "15m"], chart_timeframe=code)
+        )
+        closes = np.asarray(five["bars"]["t"]) + 300_000
+        span = seconds * 1000
+        compared = 0
+        for i, t in enumerate(other["bars"]["t"]):
+            j = int(np.searchsorted(closes, t + span, side="right")) - 1  # the last five-minute bar closed by then
+            if j < 0:
+                continue  # the first minutes of the window: what was known then is from the day before it
+            compared += 1
+            for name in ("votes", "state"):
+                assert other["context"][name][i] == five["context"][name][j], (code, name, i)
+            assert other["context"]["channel"]["middle"][i] == five["context"]["channel"]["middle"][j]
+        assert compared >= len(other["bars"]["t"]) - 4
+        # the same signals and the same changes of momentum, on other bars
+        assert [(s["t"], s["method"]) for s in other["signals"]] == [(s["t"], s["method"]) for s in five["signals"]]
+        # ... with the reading and the price of the moment of the change, whatever the bars of the chart
+        assert [(c["t"], c["to"], c["votes"], c["price"]) for c in other["context"]["changes"]] == [
+            (c["t"], c["to"], c["votes"], c["price"]) for c in five["context"]["changes"]
+        ]
+        assert all(
+            other["bars"]["t"][c["bar"]] < c["t"] <= other["bars"]["t"][c["bar"]] + span
+            for c in other["context"]["changes"]
+        )
+        assert all(
+            other["bars"]["t"][s["bar"]] < s["t"] <= other["bars"]["t"][s["bar"]] + span for s in other["signals"]
+        )
+        assert sum(other["context"]["reversion"]["buys"]) == sum(five["context"]["reversion"]["buys"])
+        assert sum(other["context"]["reversion"]["sells"]) == sum(five["context"]["reversion"]["sells"])
+
+
+def test_a_window_has_the_straight_channel_a_chart_would_show(window: dict, bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
+    """One line through the closes of the window with a band around it: the channel as it stands at the window's end."""
+    chart, straight = window["bars"], window["context"]["channel"]["straight"]
+    n = len(chart["t"])
+    slope, level = np.polyfit(np.arange(n), chart["c"], 1)
+    spread = float(np.std(np.asarray(chart["c"]) - (level + slope * np.arange(n))))
+    assert (straight["width"], straight["bars"]) == (2.0, n)
+    assert straight["start"] == pytest.approx(level, abs=6e-7)
+    assert straight["end"] == pytest.approx(level + slope * (n - 1), abs=6e-7)
+    assert straight["half"] == pytest.approx(2 * spread, abs=6e-7) and straight["half"] > 0.0005
+    # nearly all closes of the window lie inside it: it was fitted to them
+    line = straight["start"] + (straight["end"] - straight["start"]) * np.arange(n) / (n - 1)
+    inside = np.abs(np.asarray(chart["c"]) - line) <= straight["half"]
+    assert 0.9 < inside.mean() <= 1.0
+    # its right-hand end is the channel known at the last bar: fitted to the bars up to and including it
+    known = window_signals(bars, eurusd, ask(start=WINDOW[0], end="2026-10-16T12:00:00Z", timeframes=["5m", "15m"]))
+    shorter = known["context"]["channel"]["straight"]
+    assert shorter["bars"] < n and shorter["end"] != straight["end"]
+    # a window too short for a line has none
+    brief = window_signals(
+        bars,
+        eurusd,
+        ask(start="2026-10-16T06:00:00Z", end="2026-10-16T07:00:00Z", timeframes=["15m"], strategies=["rsi_reversion"]),
+    )
+    assert len(brief["bars"]["t"]) == 12 and brief["context"]["channel"]["straight"] is None
+
+
+def test_a_window_can_come_without_the_list_of_its_signals(window: dict, bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
+    """A month of signals is megabytes; the chart of what the methods said together does not need them."""
+    short = window_signals(
+        bars, eurusd, ask(start=WINDOW[0], end=WINDOW[1], timeframes=["5m", "15m"], list_signals=False)
+    )
+    assert short["signals"] is None and short["signal_count"] == window["signal_count"] == len(window["signals"])
+    assert {k: v for k, v in short.items() if k != "signals"} == {k: v for k, v in window.items() if k != "signals"}
+    assert len(json.dumps(short)) < len(json.dumps(window)) / 2
+    with pytest.raises(BacktestError, match="list_signals must be true or false"):
+        ask(list_signals="no")
+
+
+def test_a_window_without_momentum_methods_has_no_momentum(bars: Bars, eurusd) -> None:  # type: ignore[no-untyped-def]
+    out = window_signals(
+        bars,
+        eurusd,
+        ask(start=WINDOW[0], end=WINDOW[1], timeframes=["15m"], strategies=["rsi_reversion", "random_entry"]),
+    )
+    context = out["context"]
+    assert (context["voters"], context["threshold"], context["changes"]) == (0, 1, [])
+    assert set(context["votes"]) == {0} and set(context["state"]) == {0}
+    assert sum(context["reversion"]["buys"]) + sum(context["reversion"]["sells"]) == sum(
+        1 for s in out["signals"] if s["method"] == "rsi_reversion@15m"
+    )
+    assert all(value is not None for value in context["channel"]["middle"])  # the channel needs no methods
 
 
 def test_windows_that_cannot_be_drawn_are_refused(bars: Bars, eurusd, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]

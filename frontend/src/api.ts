@@ -1,6 +1,7 @@
 import { notifyUnauthorized } from "./auth";
 import type { BoardBody, BoardResult, BoardState, WindowBody, WindowResult } from "./board/model";
 import type { BacktestBody, LabInfo, Report } from "./lab/model";
+import type { Definition, Saved, SetupBody, SetupReport } from "./setups/model";
 import type { Bar, ConnEvent, Gap, Job, Obs, SystemStatus } from "./types";
 
 export class ApiError extends Error {
@@ -25,6 +26,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, response.status);
   }
+  if (response.status === 204) return undefined as T; // done, and nothing to say
   return (await response.json()) as T;
 }
 
@@ -67,4 +69,11 @@ export const api = {
   startBoard: (body: BoardBody) => request<BoardState>("/api/board/runs", post(body)),
   boardResult: () => request<BoardResult>("/api/board/result"),
   boardSignals: (body: WindowBody) => request<WindowResult>("/api/board/signals", post(body)),
+  /** The saved setups (the owner's own rules), oldest first. */
+  setups: () => request<Saved[]>("/api/setups"),
+  /** Keep a setup under its name; a name that exists is replaced. */
+  saveSetup: (symbol: string, definition: Definition) =>
+    request<Saved>(`/api/setups?${query({ symbol })}`, { ...post(definition), method: "PUT" }),
+  deleteSetup: (id: number) => request<void>(`/api/setups/${id}`, { method: "DELETE" }),
+  runSetup: (body: SetupBody) => request<SetupReport>("/api/setups/run", post(body)),
 };

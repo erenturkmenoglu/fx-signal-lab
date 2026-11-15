@@ -51,36 +51,54 @@ the commands above do, from a phone or any browser:
    - the price chart of the selected day (the stored bid bars) with every entry (arrow), clip
      added (+n), target (circle), stop (square) and exit by the clock marked on it; clicking a
      trade in the list draws its average entry, target and stop as lines and zooms to it;
-   - the days, the trades, how trades ended, results by hour of entry, and why signals were
-     not traded.
+   - the days, the trades (result first, then how each ended and its prices), how trades
+     ended, results by hour of entry, and why signals were not traded.
 
 ## In the browser: the signal board
 
 The third page, **Signal board** (`#board`), is the simple one. It asks for a period and has
 one button. Behind it every strategy runs on bars of every length (1m, 5m, 15m, 30m, 1h) with
-its default parameters and the trading rules of the instrument: with fifteen strategies, 71
+its default parameters and the trading rules of the instrument: with seventeen strategies, 81
 methods. The run happens in a process of its own and goes on if the page is closed; the last
 finished board stays on the server until the application restarts, so a phone sees what a
 desktop ran. A year of minute bars takes about ten seconds.
 
-- **How each method did.** One line per method: net result, how many trades *worked* (closed
-  with a profit after the spread) and how many *failed*, the result on the earlier and on the
-  later days of the period separately, winning and losing days, worst day, largest loss.
-  A switch shows the same signals traded with one clip only. `RAND` lines enter at random:
+- **How each method did.** One line per method: its kind (momentum or mean reversion, see
+  below), net result, how many trades *worked* (closed with a profit after the spread) and
+  how many *failed*, the average win and the average loss, the result on the earlier and on
+  the later days of the period separately, winning and losing days, worst day, largest loss.
+  The list can be narrowed to one kind and to some bar lengths. `RAND` lines enter at random:
   they are what the trading rules make on their own.
 - **Day by day.** For every trading day: which method made the most (known only afterwards),
-  how many methods made and lost money, and for the methods ticked in the table above the
-  trades that worked and failed and the result of the day.
-- **Every signal.** A price chart of one day, one week, two weeks or a month ending with the
-  day clicked, and under it one lane per strategy. A triangle marks a signal that was traded
-  (up: buy, down: sell; teal: its trade made money, red: it lost), a small tick one that was
-  not (under the line: buy, over it: sell). Pointing at a bar names the signals of that
-  moment; clicking it lists them with the reason each was or was not traded.
+  for the methods ticked in the table above the trades that worked and failed and the result
+  of the day, and what **all momentum methods** and **all mean-reversion methods** made that
+  day, added up, with how many of each made and lost money. Momentum methods earning while
+  mean-reversion methods lose is what a trending day looks like in this table; the reverse
+  is a day that stayed in its range.
+- **What the methods said together.** A chart of one day, one week, two weeks or a month
+  ending with the day clicked. No single signal is drawn on it. Under the prices are two rows
+  of plain bars:
+  - *Momentum*: of the momentum methods, those pointing up minus those pointing down. The
+    bars are teal while momentum is up and red while it is down; an upright dashed line
+    through the chart marks each change, and a table under the chart lists the changes with
+    their time, price, the reading that made them and how long the state before had lasted;
+  - *Mean reversion*: how many mean-reversion methods gave a signal in each bar, buy signals
+    above the line and sell signals below it.
+
+  On the prices lies the **trend channel**, in one of two forms. *Of this window* (the
+  default): one straight line through all the closes of the window with its band, the
+  channel as it stands at the end of the window, the way it is drawn by hand on a chart.
+  Choose a week or a month to see the channel of the last week or month; the page says how
+  many pips it rises or falls, how wide it is, and whether the last close is inside it.
+  *As known at each bar*: the channel fitted to the 24 hours before each bar, which is the
+  one the rules and the "why" table use. Pointing at a bar (or tapping it) reads it out in
+  words: the momentum reading, the signals, where the price is against the channel. On this
+  chart colour means one thing only, direction: teal is up or buy, red is down or sell.
 
 Three things on that page are there because a board invites a particular mistake:
 
-1. **The best of 71 looks good by chance.** On prices that are pure noise, a month of this
-   board shows 10 of the 66 real methods above zero and the best one at about +2 000 USD;
+1. **The best of 81 looks good by chance.** On prices that are pure noise, a month of this
+   board shows 10 of the 76 real methods above zero and the best one at about +2 000 USD;
    over a quarter one is left, over a year none. (With the first rule set, which added to
    positions, the same month showed half of them above zero and the best at +18 000: many
    small wins, the rare large loss not yet arrived.) Read the later-days column and a
@@ -91,11 +109,126 @@ Three things on that page are there because a board invites a particular mistake
 3. **Random entries are on the board.** A method that cannot beat them has no information.
 
 The commands behind the page are `fxlab board --request -` and `fxlab signals --request -`
-(JSON on standard input, JSON out), so the page and a terminal cannot disagree.
+(JSON on standard input, JSON out), so the page and a terminal cannot disagree. The window
+of a chart can be asked for with or without the list of its single signals
+(`"list_signals": false`); the page asks without, which is a thirtieth of the size for a
+month.
 
 A result stays on its page while another page is looked at: the strategy lab keeps its last
-report and the board its tables and chart until the browser tab is closed or reloaded. The
-last board is also kept by the server, so it is there again after a reload.
+report, the board its tables and chart and the setups page its last run until the browser
+tab is closed or reloaded. The last board is also kept by the server, so it is there again
+after a reload.
+
+## Momentum, mean reversion and the trend channel
+
+Every strategy gives one of two kinds of signal, and the difference matters more than the
+difference between two indicators of the same kind:
+
+| kind | strategies | trades |
+|---|---|---|
+| **momentum** | EMA, MACD, DMI, ST (trend followers); SB, DON, SQZ, CHB (breakouts) | *with* a move: it expects the move to go on |
+| **mean reversion** | RSI, BB, STO, CCI, CHN (bands and oscillators); PIV, RND (levels) | *against* a stretched move: it expects the price to come back |
+| other | TOD (the clock), RAND (random entries) | neither |
+
+Mean-reversion methods are at their busiest exactly when momentum is strongest: on a month
+of noise about six in ten of their signals point against the momentum of that moment. That
+is what they are, not a fault. The question worth asking is whether the trades taken against
+the momentum fail more often than the others, and that is measured, not assumed (the "why"
+table of a setup, below).
+
+**The momentum reading.** Each momentum method, on each bar length, points the way of its
+last signal for as long as that signal is fresh (96 of its own bars: about an hour and a half
+for a method on one-minute bars, four days for one on hourly bars). The *reading* is the
+number pointing up minus the number pointing down, between -40 and +40 with eight strategies
+on five bar lengths. The *state* is up or down once a fifth of the methods (8) more point
+one way than the other, and it stays until as many point the other way. A change of state is
+a **momentum change**. It is worked out on five-minute steps. On noise the state changes
+about twice a trading day; it is a count of trend rules that have fired, so it says a move
+has lasted long enough to be noticed, not that it will go on.
+
+**The trend channel.** A straight line fitted by least squares to closes, with a band of two
+standard deviations of the closes around that line. It is the same idea as a Bollinger band
+with a sloping middle: the slope says which way the price has been going, the band how far
+from that path it usually is. It exists in two forms, and the difference is hindsight:
+
+- *for a rule*: at each moment the line through the last 24 hours of five-minute closes
+  *before* it, drawn on to that moment, so the newest price can be outside the channel it is
+  compared with. Everything that trades or is tested uses this one;
+- *for the eye*: one line through a whole window of the chart (a day, a week, a month). Its
+  right-hand end is what was known on the last evening of the window; the rest of it was
+  drawn later than the prices under it. It is on the chart because that is how a channel is
+  looked at, and nothing is computed from it. Two strategies trade it, each over 24 hours of the
+bars it reads: `channel_reversion` (CHN) buys when a bar dips to the lower line and closes
+back inside, unless the channel is falling (and the mirror image at the upper line);
+`channel_break` (CHB) trades the first close outside it.
+
+**What can be said about a trade.** From these two things, five statements:
+
+| | statement | known |
+|---|---|---|
+| against the momentum | the state pointed the other way when the trade was opened | at entry |
+| against the channel's slope | over its 24 hours the channel had moved against the trade by more than half its own height | at entry |
+| outside the channel | the price was already through the edge on the trade's losing side | at entry |
+| momentum turned | the state changed to the other side while the trade was open | afterwards |
+| price left the channel | the price went through the edge of the channel as drawn at entry, on the losing side | afterwards |
+
+The first three are known when a trade would be opened, so trades can be left out by them.
+The last two are seen only while a trade is open: they describe how it went wrong and can
+never be a reason for not having taken it. The code keeps the two apart
+(`backend/fxlab/research/context.py`), and nothing in it looks ahead.
+
+## In the browser: my setups
+
+The fourth page, **My setups** (`#setups`), is for rules of one's own: "whenever RSI or
+Bollinger gives a signal, stop five pips against, target five pips".
+
+1. **The rule.** Tick strategies under the bars they should read (at most twelve methods,
+   each with its default parameters). Choose whether a signal of **any** one of them opens a
+   trade or **all** of them have to point the same way (the oldest of their signals no more
+   than so many minutes old). Set the stop, the target, and how much room a signal must see
+   (0 takes every signal that sees more than the spread; the instrument's own rule is 5).
+   Everything else is as in the strategy lab: one order at a time, nothing added to it.
+2. **Save.** A setup is kept on the server under its name, so every device that signs in
+   sees the same list. Saving under a name that exists replaces that setup. What is kept is
+   the rule; the period belongs to a run.
+3. **Run.** The setup is traded by the same engine as everything else. The result opens with
+   the answer to the first question (how many trades, how many worked, how many failed, the
+   total and the average win and loss), then the table of totals with the earlier and the
+   later days apart, the running total with the result of each day, the days, every trade
+   on the chart of its day, and the list of all trades.
+4. **Why trades failed.** Each trade carries what was going on around it (the five
+   statements above), and a table asks of each statement: did the trades it held for work
+   less often than the trades it did not hold for?
+
+**Reading the "why" table.**
+
+- *Difference* is the share of trades that worked with the statement minus the share
+  without it, in percentage points. *Chance gives* is how far apart two groups of these
+  sizes land by luck alone (two standard errors). A difference inside it is no finding.
+- Five lines are five chances to be fooled, and the earlier and later days make ten more.
+  Believe a line when the later days show it too, with the same sign.
+- The two lower lines (momentum turned, price left the channel) nearly always differ: a
+  trade that lost is a trade the price moved against. They say *how* trades failed.
+- To act on one of the three upper lines, tick it under **Leave out** in the form and run
+  again. Judge the new run by its later days only: a filter chosen on the days it is judged
+  on always looks good.
+- **The placebo.** Run the same table on random entries (tick RAND, under "Neither"). What
+  shows there too is about the market at those moments, not about your signals.
+
+What this looks like on prices that are pure noise (a random-walk year; not market data).
+"RSI or Bollinger, stop 5, target 5, every signal": 2 152 trades, 40.0% worked, -99 USD a
+trade (the spread). At entry: against the momentum -3.7 points (chance ±4.3), against the
+channel's slope +1.2 (±4.5), outside the channel -3.7 (±4.4): nothing, as it must be.
+Afterwards: momentum turned -12.3 (±9.5), price left the channel -10.1 (±4.4): beyond
+chance, as they must be. Random entries on the same year (5 011 trades): the three entry
+lines between -1.4 and +0.7 points, all inside ±4. A single month of the same rule showed
+"against the momentum" at -10 points with ±20 of chance, and leaving those trades out
+turned -9 000 USD into -1 000: that is what a month can do on noise.
+
+The command behind the page is `fxlab setup --request -`; the saved setups are served at
+`/api/setups` (`GET`, `PUT`, `DELETE /api/setups/{id}`) and a run at `POST /api/setups/run`.
+A setup that names one method and leaves nothing out is that method's backtest, trade for
+trade; the tests and the CI check this.
 
 ## What is tested on what
 
@@ -212,11 +345,16 @@ function from bars to signals in `backend/fxlab/research/strategies.py`.
 | `squeeze_breakout` (SQZ) | breakout | a quiet stretch ends (the Bollinger bands had been inside the Keltner channel): the close is then above / below the average | a multiple of the average true range |
 | `pivot_reversion` (PIV) | level | a bar dips to the support (S1) worked out from the day before and closes back above it / pokes above the resistance (R1) and closes back below | distance to the pivot |
 | `round_number` (RND) | level | the price comes to a round number (every 50 pips) from above / below and is turned away (`mode=fade`), or closes through it (`mode=break`) | a parameter |
+| `channel_reversion` (CHN) | reversion | a bar dips to the lower line of the trend channel and closes back inside / pokes above the upper line and closes back inside; by default (`side=with`) not when the channel itself is falling / rising | distance to the middle line |
+| `channel_break` (CHB) | breakout | the first close above / below the trend channel drawn from the bars before | half the height of the channel |
 | `session_drift` (TOD) | time | never looks at the price: sells at the European open, buys at the New York open | the move expected, a parameter |
 | `random_entry` (RAND) | benchmark | at random moments, in a random direction | none: it passes every filter |
 
+The families reversion and level give mean-reversion signals, trend and breakout give
+momentum signals (see "Momentum, mean reversion and the trend channel").
+
 `random_entry` is not a strategy. It is the line the others are measured against: what the
-target, the stop, the adding and the costs produce when the entries carry no information.
+target, the stop and the costs produce when the entries carry no information.
 
 Signals are events, not states: an RSI that stays oversold for an hour signals once.
 
@@ -226,7 +364,7 @@ the exit is the engine's target and stop, the same for every strategy.
 ### Where these come from, and what is known about them
 
 The indicators are the ones every charting package has; they are here because they are what
-practitioners actually look at, not because any of them is known to work. Four findings from
+practitioners actually look at, not because any of them is known to work. Six findings from
 the academic literature shaped the list and how to read the results:
 
 - **Intraday rules find patterns but not profits after costs.** Neely and Weller (2003,
@@ -255,6 +393,24 @@ the academic literature shaped the list and how to read the results:
   reports that currencies tend to lose value during their own country's working hours and
   gain during the other country's. `session_drift` is that finding as a rule; it is the only
   method here that does not look at the price at all.
+
+- **Stops.** Kaminski and Lo (2014, *Journal of Financial Markets* 18, 234-254,
+  [doi:10.1016/j.finmar.2013.07.001](https://doi.org/10.1016/j.finmar.2013.07.001);
+  [open copy](https://dspace.mit.edu/handle/1721.1/114876)) ask when a stop-loss rule adds
+  anything. Their answer: if prices follow a random walk a simple stop-loss rule lowers the
+  expected return of the strategy it is laid over; it can add value when returns have
+  momentum. Their setting is a stop on a buy-and-hold portfolio, not a five-pip bracket on
+  an intraday trade, but the logic is the one measured in "What adding to a position does
+  to the numbers": on noise a stop moves losses around and leaves the average where it was.
+  A stop earns its keep only if losing moves tend to continue, which is the momentum
+  question again.
+- **Channels, support and resistance on intraday FX.** Curcio, Goodhart, Guillaume and
+  Payne (1997, *International Journal of Finance & Economics* 2(4), 267-280;
+  [abstract](https://econpapers.repec.org/RePEc:ijf:ijfiec:v:2:y:1997:i:4:p:267-80)) took
+  the levels and trading ranges that technical analysts themselves supplied for the
+  intra-day foreign exchange market and traded their breaks. Some profit in periods of
+  trend, none on average, and less after transaction costs. That is the prior for the two
+  channel methods here, whose channel is in addition a fitted line, not an analyst's.
 
 Not on the list, and why: Williams %R is the stochastic %K upside down; VWAP, on-balance
 volume and money flow need traded volume, which spot FX quotes do not have (the rule against
@@ -346,13 +502,23 @@ the spread. On noise it is right four times in ten.
   four: between -0.11 and +0.06 pips per clip without a spread, between -1.18 and -0.85 with
   a spread of 1.0. A look-ahead error anywhere between the bars and the trade list shows up
   here as profit from noise; two such errors planted on purpose moved the figure by 1.5 to
-  3.5 pips. All fifteen strategies pass this test, each over more than 2 000 trades.
+  3.5 pips. All seventeen strategies pass this test, each over more than 2 000 trades.
 - **The board against the single backtest, and the chart against the board.** Each line of a
   board must be the backtest of that method, number for number; the trades drawn in a window
   must be the trades the board counts for those days; a period reported with a run-in must
   be the later part of the longer report.
 - **Look-ahead, directly.** Every indicator and every strategy is recomputed on series cut
-  short at many points; nothing before the cut may change.
+  short at many points; nothing before the cut may change. The same for the momentum reading
+  and the trend channel.
+- **The context against a count by hand.** What a window says about momentum, the
+  mean-reversion signals and the channel is compared, bar by bar, with a plain loop over the
+  strategies' own signals and with a line fitted by another routine; the same window on
+  one-minute, five-minute and thirty-minute chart bars must tell the same story.
+- **Setups.** A setup of one method is that method's backtest, trade for trade. "All" never
+  trades where "any" would not. On sixteen random walks a setup loses the spread whatever it
+  leaves out, what was known at entry says nothing about the outcome, and what came after
+  says a lot: the table has to be able to find the mechanical effect and must not find the
+  other.
 
 ## Limits, and what has not been verified
 
@@ -377,6 +543,19 @@ the spread. On noise it is right four times in ten.
   in-sample part. The last board is kept in memory only: after a restart it is run again.
 - **A board is many tests at once.** Nothing here corrects for that beyond the earlier/later
   split and the random entries; a formal correction (as in Hsu, Taylor and Wang) is not built.
+- **The momentum reading is this project's own definition**, not one from the literature:
+  a count of trend and breakout rules, a fifth of them as the threshold, 96 bars as the life
+  of a signal. The numbers were chosen once, by judgment, and have not been tuned on data;
+  whether the reading says anything about EUR/USD is exactly what the "why" table is for.
+- **The trend channel is a regression over a fixed 24 hours.** A chartist draws channels
+  through chosen highs and lows over spans he picks; this one is the same recipe at every
+  moment, which makes it testable and makes it miss channels of other lengths.
+- **The "why" table is a comparison of shares, not a model.** It looks at one statement at a
+  time; two statements that usually hold together (against the momentum and outside the
+  channel) are not separated. It counts trades that worked, not money. With a stop as near
+  as the target the two say the same; with another stop or target read the net results of
+  the two groups as well (they are in the JSON).
+- **Setups use default parameters** and at most twelve methods.
 - **Live signals will use the same functions** (step 4 of the roadmap). Live bars are built
   from mid prices and backtest bars from bids; that difference has to be handled there.
 

@@ -29,6 +29,19 @@ export interface Tally extends Part {
 
 export type Variant = "all" | "one";
 
+/** What kind of signal a method gives: with a move, against a stretched one, or neither. */
+export type Kind = "momentum" | "reversion" | "other";
+
+export const KINDS: { key: Kind; label: string; short: string }[] = [
+  { key: "momentum", label: "Momentum", short: "Momentum" },
+  { key: "reversion", label: "Mean reversion", short: "Mean rev." },
+  { key: "other", label: "Other", short: "Other" },
+];
+
+/** The kind of a method as the server classed it; anything it did not class is "other". */
+export const kindOf = (method: { style?: string }): Kind =>
+  method.style === "momentum" || method.style === "reversion" ? method.style : "other";
+
 /** A method: one strategy, with its default parameters, reading bars of one length. */
 export interface Combo {
   id: string; // "rsi_reversion@5m"
@@ -36,6 +49,7 @@ export interface Combo {
   title: string;
   short: string;
   family: string;
+  style?: string; // momentum, reversion or other
   timeframe: string;
   signals: number;
   all?: Tally; // adding to positions as the rules allow
@@ -98,21 +112,8 @@ export interface BoardBody {
 
 export interface WindowBody extends BoardBody {
   chart_timeframe: string;
-}
-
-export interface Signal {
-  method: string;
-  t: number; // when the signal was known: the close of its bar, ms
-  d: 1 | -1;
-  potential: number | null; // pips the signal saw, after the spread
-  /** how the trade ended, or why there was none */
-  status: string;
-  pnl?: number;
-  clips?: number;
-  entry_ms?: number;
-  entry_price?: number;
-  exit_ms?: number;
-  exit_price?: number;
+  /** false: the single signals are left out (a month of them is megabytes); what they add up to stays */
+  list_signals: boolean;
 }
 
 export interface Method {
@@ -122,7 +123,36 @@ export interface Method {
   title: string;
   timeframe: string;
   family?: string;
+  style?: string;
 }
+
+/** What the methods said together, one value for each bar of the chart: what was known when that bar closed. */
+export interface WindowContext {
+  voters: number; // how many momentum methods there are
+  threshold: number; // this many more pointing one way than the other make the state that way
+  votes: (number | null)[]; // momentum methods pointing up minus those pointing down
+  state: number[]; // +1 up, -1 down, 0 not decided
+  /** where the state went from up to down or back, with the reading and the price of that moment */
+  changes: { t: number; to: number; bar: number; votes: number; price: number }[];
+  reversion: { buys: number[]; sells: number[] }; // mean-reversion signals that came in each bar
+  channel: {
+    hours: number;
+    width: number;
+    // the channel as it was known at each bar: fitted to the hours before it
+    middle: (number | null)[];
+    upper: (number | null)[];
+    lower: (number | null)[];
+    /**
+     * The channel of the whole window as it stands at its end: one straight line through the closes
+     * (``start`` at the first bar, ``end`` at the last) and ``half`` to either edge.  Missing for a
+     * window too short for a line.
+     */
+    straight?: { width: number; bars: number; start: number; end: number; half: number } | null;
+  };
+}
+
+/** Which channel a chart shows: the straight one of the window, or the one known at each bar. */
+export type ChannelView = "window" | "rolling";
 
 export interface WindowResult {
   request: { symbol: string; start: string; end: string; chart_timeframe: string };
@@ -130,7 +160,8 @@ export interface WindowResult {
   run_in_from: string;
   methods: Method[];
   bars: { timeframe: string; seconds: number; t: number[]; o: number[]; h: number[]; l: number[]; c: number[] };
-  signals: Signal[];
+  context: WindowContext;
+  signal_count: number;
 }
 
 const DAY_MS = 86_400_000;
@@ -191,9 +222,15 @@ export function tallyOf(combo: Combo, variant: Variant): Tally {
 const isBenchmark = (combo: Combo) => combo.family === "benchmark";
 
 /** The methods as lines of the scoreboard, best first.  Methods without a trade go to the end. */
-export function rank(combos: Combo[], variant: Variant, sort: SortKey, timeframes: ReadonlySet<string> | null = null): Line[] {
+export function rank(
+  combos: Combo[],
+  variant: Variant,
+  sort: SortKey,
+  timeframes: ReadonlySet<string> | null = null,
+  kind: Kind | null = null,
+): Line[] {
   const lines = combos
-    .filter((c) => timeframes == null || timeframes.has(c.timeframe))
+    .filter((c) => (timeframes == null || timeframes.has(c.timeframe)) && (kind == null || kindOf(c) === kind))
     .map((combo) => {
       const tally = tallyOf(combo, variant);
       return {
@@ -280,6 +317,14 @@ export interface DayRow {
   /** how many of the board's methods made money that day, and how many lost */
   up: number;
   down: number;
+  /** the same day by kind of method: what all momentum methods made together, and all mean-reversion methods */
+  kinds: Record<"momentum" | "reversion", KindDay>;
+}
+
+export interface KindDay {
+  net: number;
+  up: number; // methods of the kind that made money that day
+  down: number; // ... that lost
 }
 
 /**
@@ -313,13 +358,23 @@ export function dayRows(
     let top: DayRow["top"] = null;
     let up = 0;
     let down = 0;
+    const kinds: DayRow["kinds"] = { momentum: { net: 0, up: 0, down: 0 }, reversion: { net: 0, up: 0, down: 0 } };
     for (const { combo, pnl } of field) {
       const made = pnl[index] ?? 0;
       if (made > 0) up += 1;
       else if (made < 0) down += 1;
       if (made > 0 && (top == null || made > top.pnl)) top = { id: combo.id, label: methodLabel(combo), pnl: made };
+      const kind = kindOf(combo);
+      if (kind !== "other") {
+        const sum = kinds[kind];
+        sum.net += made;
+        if (made > 0) sum.up += 1;
+        else if (made < 0) sum.down += 1;
+      }
     }
-    return { day, index, later: result.split_day != null && day >= result.split_day, cells, best, top, up, down };
+    kinds.momentum.net = Math.round(kinds.momentum.net * 100) / 100;
+    kinds.reversion.net = Math.round(kinds.reversion.net * 100) / 100;
+    return { day, index, later: result.split_day != null && day >= result.split_day, cells, best, top, up, down, kinds };
   });
   return rows.reverse();
 }
@@ -380,7 +435,7 @@ export function followTheWinner(combos: Combo[], variant: Variant, timeframes: R
   return out.days ? out : null;
 }
 
-// --- the signals of a window -------------------------------------------------------------------
+// --- a window on the chart: what the methods said together ---------------------------------------
 
 export const WINDOWS = [
   { key: "day", label: "1 day", days: 1, chart: "1m" },
@@ -391,8 +446,8 @@ export const WINDOWS = [
 export type WindowKey = (typeof WINDOWS)[number]["key"];
 
 /**
- * The request for the signals of the ``length`` trading days that end with ``day``.  The chart
- * under them gets bars that keep a window readable, never finer than the bars trades are simulated on.
+ * The request for the window of the ``length`` trading days that end with ``day``.  The chart gets
+ * bars that keep a window readable, never finer than the bars trades are simulated on.
  */
 export function windowBody(result: BoardResult, day: string, length: WindowKey): { body: WindowBody; from: string } | null {
   const last = result.days.indexOf(day);
@@ -412,164 +467,154 @@ export function windowBody(result: BoardResult, day: string, length: WindowKey):
       end: new Date(endSpan[1] + baseSeconds * 1000).toISOString(),
       base_timeframe: base,
       chart_timeframe: (SECONDS[choice.chart] ?? 60) >= baseSeconds ? choice.chart : base,
+      list_signals: false,
     },
   };
 }
 
-export const TRADED: ReadonlySet<string> = new Set(["target", "stop", "time", "end_of_day", "end_of_data"]);
+export type Where = "inside" | "above" | "below";
 
-export const STATUS_TEXT: Record<string, string> = {
-  target: "took its profit",
-  stop: "was stopped out",
-  time: "closed after the longest holding time",
-  end_of_day: "closed at the end of the day",
-  end_of_data: "still open where the data ends",
-  potential: "not traded: too little potential",
-  busy: "not traded: this method had a position open",
-  hours: "not traded: outside the entry hours",
-  day_end: "not traded: too close to the end of the day",
-  no_price: "not traded: no price after the signal",
-  off: "not traded: this direction is switched off",
-};
-
-export type Outcome = "won" | "lost" | "flat" | "none";
-
-/** What became of a signal: its trade made money, lost, came out at zero, or there was no trade. */
-export function outcomeOf(signal: Signal): Outcome {
-  if (signal.pnl == null) return "none";
-  return signal.pnl > 0 ? "won" : signal.pnl < 0 ? "lost" : "flat";
+/** One bar of the window in words and numbers: what was known when it closed. */
+export interface Reading {
+  time: number; // when the bar closed, ms
+  close: number;
+  votes: number | null; // momentum methods pointing up minus those pointing down; null: not known yet
+  state: -1 | 0 | 1;
+  buys: number; // mean-reversion signals that came in this bar
+  sells: number;
+  channel: { lower: number; middle: number; upper: number } | null;
+  /** the close against the trend channel; null while the channel is not drawn yet */
+  where: Where | null;
 }
 
-export const OUTCOME_SIGN: Record<Outcome, string> = { won: "✓", lost: "✗", flat: "=", none: "" };
+const sign = (value: number): -1 | 0 | 1 => (value > 0 ? 1 : value < 0 ? -1 : 0);
 
-/** Which signals a reader has asked to see: of which bar lengths, and whether those not traded too. */
-export function visibleSignals(
-  signals: Signal[],
-  methods: Map<string, Method>,
-  timeframes: ReadonlySet<string> | null,
-  untraded: boolean,
-): Signal[] {
-  return signals.filter((s) => {
-    if (!untraded && !TRADED.has(s.status)) return false;
-    const method = methods.get(s.method);
-    return method != null && (timeframes == null || timeframes.has(method.timeframe));
+/** The straight channel of the window at one of its bars; null when the window has none. */
+export function straightAt(result: WindowResult, index: number): { lower: number; middle: number; upper: number } | null {
+  const line = result.context.channel.straight;
+  const last = result.bars.t.length - 1;
+  if (!line || index < 0 || index > last) return null;
+  const middle = last > 0 ? line.start + ((line.end - line.start) * index) / last : line.end;
+  return { lower: middle - line.half, middle, upper: middle + line.half };
+}
+
+const against = (close: number, channel: { lower: number; upper: number }): Where =>
+  close > channel.upper ? "above" : close < channel.lower ? "below" : "inside";
+
+export function readingAt(result: WindowResult, index: number, view: ChannelView = "rolling"): Reading | null {
+  const { bars, context } = result;
+  const start = bars.t[index];
+  const close = bars.c[index];
+  if (start == null || close == null) return null;
+  const lower = context.channel.lower[index];
+  const middle = context.channel.middle[index];
+  const upper = context.channel.upper[index];
+  const rolling = lower != null && middle != null && upper != null ? { lower, middle, upper } : null;
+  const channel = view === "window" ? straightAt(result, index) : rolling;
+  return {
+    time: start + bars.seconds * 1000,
+    close,
+    votes: context.votes[index] ?? null,
+    state: sign(context.state[index] ?? 0),
+    buys: context.reversion.buys[index] ?? 0,
+    sells: context.reversion.sells[index] ?? 0,
+    channel,
+    where: channel == null ? null : against(close, channel),
+  };
+}
+
+export interface StraightChannel {
+  rise: number; // what the middle line gains from the first bar of the window to the last, in pips
+  half: number; // from the middle line to either edge, in pips
+  /** the last close of the window against it */
+  where: Where;
+}
+
+/** The straight channel of a window in a few numbers; null when the window has none. */
+export function straightChannel(result: WindowResult, pip: number): StraightChannel | null {
+  const line = result.context.channel.straight;
+  const last = result.bars.t.length - 1;
+  const close = result.bars.c[last];
+  const edges = straightAt(result, last);
+  if (!line || close == null || !edges || !(pip > 0)) return null;
+  const pips = (value: number) => Math.round((value / pip) * 10) / 10;
+  return { rise: pips(line.end - line.start), half: pips(line.half), where: against(close, edges) };
+}
+
+export const STATE_TEXT: Record<-1 | 0 | 1, string> = { 1: "up", [-1]: "down", 0: "not decided" };
+
+/** The momentum reading of a bar as a sentence: "+12 of 40: up". */
+export function momentumText(reading: Reading, voters: number): string {
+  if (reading.votes == null) return "not known yet";
+  const votes = reading.votes > 0 ? `+${reading.votes}` : reading.votes < 0 ? `−${Math.abs(reading.votes)}` : "0";
+  return `${votes} of ${voters}: ${STATE_TEXT[reading.state]}`;
+}
+
+export interface ChangeRow {
+  t: number; // when momentum changed, ms
+  to: 1 | -1;
+  bar: number; // the bar of the chart that closed with it
+  price: number; // the price at that moment
+  votes: number; // the reading that made the change
+  /** how long momentum had pointed the other way, ms; null when that began before the window */
+  lasted: number | null;
+}
+
+/** The momentum changes of a window, newest first. */
+export function changeRows(result: WindowResult): ChangeRow[] {
+  const rows: ChangeRow[] = result.context.changes.map((change, k, all) => {
+    const before = all[k - 1];
+    return {
+      t: change.t,
+      to: change.to > 0 ? 1 : -1,
+      bar: change.bar,
+      price: change.price,
+      votes: change.votes,
+      lasted: before ? change.t - before.t : null,
+    };
   });
+  return rows.reverse();
 }
 
-export interface Lane {
-  strategy: string;
-  short: string;
-  title: string;
+export interface WindowCount {
+  bars: number;
+  changes: number;
+  up: number; // bars on which momentum was up
+  down: number;
+  buys: number; // mean-reversion signals
+  sells: number;
+  /** ... of which pointed against the momentum of their bar: a buy while it was down, a sell while it was up */
+  against: number;
+  /** bars that closed outside the trend channel */
+  outside: number;
 }
 
-const FAMILIES = ["reversion", "trend", "breakout", "level", "time", "benchmark"];
-
-/** One lane per strategy, kindred strategies next to each other, the benchmark last. */
-export function lanesOf(methods: Method[]): Lane[] {
-  const seen = new Map<string, Lane & { family: number; order: number }>();
-  methods.forEach((m, order) => {
-    if (seen.has(m.strategy)) return;
-    const family = FAMILIES.indexOf(m.family ?? "");
-    seen.set(m.strategy, { strategy: m.strategy, short: m.short, title: m.title, family: family < 0 ? FAMILIES.length : family, order });
-  });
-  return [...seen.values()]
-    .sort((a, b) => a.family - b.family || a.order - b.order)
-    .map(({ strategy, short, title }) => ({ strategy, short, title }));
-}
-
-export interface LaneMark {
-  time: number; // seconds: the chart bar in which the signals became known
-  lane: number; // index into the lanes
-  direction: 1 | -1;
-  /** of the trades these signals led to, taken together; "none" when none was traded */
-  outcome: Outcome;
-  signals: Signal[];
-}
-
-/** The chart bar a moment falls in, or the first one after it when there is a hole; null beyond the last bar. */
-export function barAt(times: number[], seconds: number, ms: number): number | null {
-  const wanted = Math.floor(ms / 1000 / seconds) * seconds;
-  let low = 0;
-  let high = times.length;
-  while (low < high) {
-    const mid = (low + high) >> 1;
-    if ((times[mid] ?? 0) < wanted) low = mid + 1;
-    else high = mid;
-  }
-  return times[low] ?? null;
-}
-
-/**
- * Marks for the lanes under a chart: the signals of one strategy and one direction that became known
- * in the same chart bar share a mark.  A signal known when its bar closed sits on the chart bar that
- * starts at that moment: the first one in which it could be acted on.  Sorted by time.
- */
-export function laneMarks(
-  signals: Signal[],
-  methods: Map<string, Method>,
-  lanes: Lane[],
-  times: number[], // start of each chart bar, seconds, ascending
-  seconds: number,
-): LaneMark[] {
-  const laneOf = new Map(lanes.map((lane, index) => [lane.strategy, index]));
-  const groups = new Map<string, LaneMark>();
-  for (const signal of signals) {
-    const lane = laneOf.get(methods.get(signal.method)?.strategy ?? "");
-    const time = barAt(times, seconds, signal.t);
-    if (lane == null || time == null) continue;
-    const key = `${lane}:${time}:${signal.d}`;
-    let mark = groups.get(key);
-    if (!mark) {
-      mark = { time, lane, direction: signal.d, outcome: "none", signals: [] };
-      groups.set(key, mark);
-    }
-    mark.signals.push(signal);
-  }
-  const marks = [...groups.values()];
-  for (const mark of marks) {
-    const traded = mark.signals.filter((s) => s.pnl != null);
-    if (traded.length) {
-      const net = traded.reduce((sum, s) => sum + (s.pnl ?? 0), 0);
-      mark.outcome = net > 0 ? "won" : net < 0 ? "lost" : "flat";
-    }
-  }
-  return marks.sort((a, b) => a.time - b.time || a.lane - b.lane || b.direction - a.direction);
-}
-
-/** The signals by the chart bar they became known in, traded ones first, for the read-out of a bar. */
-export function signalsByBar(signals: Signal[], times: number[], seconds: number): Map<number, Signal[]> {
-  const out = new Map<number, Signal[]>();
-  for (const signal of signals) {
-    const time = barAt(times, seconds, signal.t);
-    if (time == null) continue;
-    const list = out.get(time);
-    if (list) list.push(signal);
-    else out.set(time, [signal]);
-  }
-  for (const list of out.values()) {
-    list.sort((a, b) => Number(TRADED.has(b.status)) - Number(TRADED.has(a.status)) || a.t - b.t || a.method.localeCompare(b.method));
+/** What a window amounts to before any single bar is looked at. */
+export function countWindow(result: WindowResult): WindowCount {
+  const { context, bars } = result;
+  const out: WindowCount = { bars: bars.t.length, changes: context.changes.length, up: 0, down: 0, buys: 0, sells: 0, against: 0, outside: 0 };
+  for (let i = 0; i < bars.t.length; i += 1) {
+    const state = context.state[i] ?? 0;
+    const buys = context.reversion.buys[i] ?? 0;
+    const sells = context.reversion.sells[i] ?? 0;
+    if (state > 0) out.up += 1;
+    else if (state < 0) out.down += 1;
+    out.buys += buys;
+    out.sells += sells;
+    if (state < 0) out.against += buys;
+    else if (state > 0) out.against += sells;
+    const where = readingAt(result, i)?.where;
+    if (where === "above" || where === "below") out.outside += 1;
   }
   return out;
 }
 
-export interface Count {
-  signals: number;
-  traded: number;
-  won: number;
-  lost: number;
-  net: number;
-}
-
-/** How many signals there are, how many were traded, and what the trades made. */
-export function countSignals(signals: Signal[]): Count {
-  const out: Count = { signals: signals.length, traded: 0, won: 0, lost: 0, net: 0 };
-  for (const signal of signals) {
-    if (signal.pnl == null) continue;
-    out.traded += 1;
-    out.net += signal.pnl;
-    if (signal.pnl > 0) out.won += 1;
-    else if (signal.pnl < 0) out.lost += 1;
-  }
-  out.net = Math.round(out.net * 100) / 100;
-  return out;
+/** A length of time in words: "40 min", "3 h 20 min", "2 d 4 h". */
+export function lasted(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
 }

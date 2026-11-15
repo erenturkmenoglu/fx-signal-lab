@@ -277,3 +277,78 @@ def supertrend(
             trend = 1.0
         line[i], direction[i] = (lower if trend > 0 else upper), trend
     return line, direction
+
+
+#: up to this many values a regression channel is worked out on the windows themselves
+_EXACT_WINDOW = 128
+
+
+def regression_channel(
+    values: npt.ArrayLike, n: int = 100, k: float = 2.0, ahead: int = 0
+) -> tuple[Array, Array, Array, Array]:
+    """Trend channel by linear regression: (middle, upper, lower, slope).
+
+    A straight line is fitted to the last ``n`` values.  ``middle`` is that line at the newest
+    of them, ``slope`` its rise per step, and the channel lies ``k`` standard deviations of the
+    values around the line on either side (the population standard deviation, as for
+    Bollinger bands).
+
+    With ``ahead`` the line fitted to the ``n`` values that end ``ahead`` steps earlier is
+    extended to the present: the channel as it could be drawn before the newest values were
+    known, which is the one a price can break out of.
+
+    Long windows (a day of minute bars is 1 440 values) are worked out with running sums of
+    the values relative to the first of them; the error stays below a billionth of a price.
+    """
+    if n < 3:
+        raise ValueError("a regression channel needs at least 3 values")
+    if ahead < 0:
+        raise ValueError("ahead must not be negative")
+    y = _as_array(values)
+    size = len(y)
+    middle = np.full(y.shape, np.nan)
+    slope = np.full(y.shape, np.nan)
+    sigma = np.full(y.shape, np.nan)
+    mean_x = (n - 1) / 2.0
+    sxx = n * (n * n - 1) / 12.0
+    if size >= n and n <= _EXACT_WINDOW:
+        x = np.arange(n, dtype=np.float64) - mean_x
+        windows = np.lib.stride_tricks.sliding_window_view(y, n)
+        step = max(1, _CHUNK_BYTES // (8 * n))
+        for first in range(0, len(windows), step):
+            block = windows[first : first + step]
+            mean_y = block.mean(axis=1)
+            b = (block * x).sum(axis=1) / sxx  # row by row: a value must not depend on how many rows are worked on
+            miss = block - mean_y[:, None] - b[:, None] * x
+            rows = slice(first + n - 1, first + n - 1 + len(block))
+            middle[rows] = mean_y + b * mean_x
+            slope[rows] = b
+            sigma[rows] = np.sqrt((miss * miss).mean(axis=1))
+    elif size >= n:
+        reference = y[0]
+        z = y - reference
+        position = np.arange(size, dtype=np.float64)
+        sum_z = np.concatenate(([0.0], np.cumsum(z)))
+        sum_iz = np.concatenate(([0.0], np.cumsum(position * z)))
+        sum_zz = np.concatenate(([0.0], np.cumsum(z * z)))
+        end = np.arange(n, size + 1)  # one past the newest value of each window
+        start = end - n
+        sy = sum_z[end] - sum_z[start]
+        sxy = (sum_iz[end] - sum_iz[start]) - start * sy  # with x = 0 .. n-1 inside the window
+        syy = sum_zz[end] - sum_zz[start]
+        b = (sxy - mean_x * sy) / sxx
+        mean_y = sy / n
+        residual = syy - n * mean_y * mean_y - b * b * sxx
+        middle[n - 1 :] = mean_y + b * mean_x + reference
+        slope[n - 1 :] = b
+        sigma[n - 1 :] = np.sqrt(np.maximum(residual, 0.0) / n)
+    if ahead:
+        moved_middle = np.full(y.shape, np.nan)
+        moved_slope = np.full(y.shape, np.nan)
+        moved_sigma = np.full(y.shape, np.nan)
+        if size > ahead:
+            moved_middle[ahead:] = middle[:-ahead] + ahead * slope[:-ahead]
+            moved_slope[ahead:] = slope[:-ahead]
+            moved_sigma[ahead:] = sigma[:-ahead]
+        middle, slope, sigma = moved_middle, moved_slope, moved_sigma
+    return middle, middle + k * sigma, middle - k * sigma, slope

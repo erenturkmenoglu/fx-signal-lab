@@ -21,7 +21,16 @@ from fxlab.api.routes import get_service
 from fxlab.logging import get_logger
 from fxlab.research.board import BoardRequest
 from fxlab.research.report import BacktestError, BacktestRequest
-from fxlab.services.backtest import check_board, check_request, describe_lab
+from fxlab.research.setups import SetupRequest
+from fxlab.services.backtest import (
+    check_board,
+    check_request,
+    check_setup,
+    delete_setup,
+    describe_lab,
+    list_setups,
+    save_setup,
+)
 
 log = get_logger(__name__)
 router = APIRouter()
@@ -270,6 +279,61 @@ async def board_signals(request: Request, body: dict[str, Any] = Body(...)) -> R
         return await _answer("signals", request, body, "the window of signals")
     finally:
         lock.release()
+
+
+# --- setups: the owner's own rules -------------------------------------------------------------
+
+
+@router.post("/setups/run")
+async def run_setup(request: Request, body: dict[str, Any] = Body(...)) -> Response:  # noqa: B008
+    """Run a setup on the stored history: the report of a backtest, with every trade described.
+
+    Body: ``{"symbol", "start", "end", "name"?, "methods", "mode"?, "within_minutes"?, "skip"?,
+    "execution"?, "split"?, "base_timeframe"?}``.
+    """
+    service = get_service(request)
+    try:
+        check_setup(service.registry, SetupRequest.from_mapping(body))
+    except BacktestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    lock = _lock(request)
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="another run is in progress; try again when it has finished")
+    async with lock:
+        return await _answer("setup", request, body, "the setup")
+
+
+def _symbol(request: Request, symbol: str | None) -> str:
+    active = get_service(request).registry.active()
+    return (symbol or (active[0].symbol if active else "")).upper()
+
+
+@router.get("/setups")
+async def saved_setups(request: Request) -> list[dict[str, Any]]:
+    """The setups that have been saved, oldest first."""
+    return await list_setups(get_service(request).engine)
+
+
+@router.put("/setups")
+async def keep_setup(request: Request, body: dict[str, Any] = Body(...), symbol: str | None = None) -> dict[str, Any]:  # noqa: B008
+    """Save a setup under its name; saving under a name that exists replaces that setup.
+
+    Body: ``{"name", "methods", "mode"?, "within_minutes"?, "skip"?, "execution"?}``.
+    """
+    service = get_service(request)
+    try:
+        return await save_setup(
+            service.engine, service.registry, _symbol(request, symbol), body, service.clock.now_ms()
+        )
+    except BacktestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@router.delete("/setups/{setup_id}", status_code=204)
+async def forget_setup(request: Request, setup_id: int) -> Response:
+    if not await delete_setup(get_service(request).engine, setup_id):
+        raise HTTPException(status_code=404, detail="there is no such setup")
+    return Response(status_code=204)
 
 
 async def stop_runs(app: Any) -> None:

@@ -4,11 +4,14 @@ import { Panel, Result } from "../components/ui";
 import { dateTimeUTC } from "../format";
 import { DownloadButtons, DownloadNote, useHistoryDownload } from "../lab/history";
 import { type LabInfo, defaultBase, downloadRange, missingRanges, money, percent, signedMoney, stored, units } from "../lab/model";
-import { WindowPanel } from "./WindowChart";
+import { WindowPanel } from "./ContextChart";
 import {
   type BoardResult,
   type BoardState,
   type DayRow,
+  KINDS,
+  type Kind,
+  type KindDay,
   type Line,
   PRESETS,
   type Preset,
@@ -19,6 +22,7 @@ import {
   defaultPicks,
   followTheWinner,
   headline,
+  kindOf,
   methodLabel,
   presetPeriod,
   rank,
@@ -73,6 +77,24 @@ function BarLengths({
     </div>
   );
 }
+
+/** Which kind of method the scoreboard lists: all, those that trade with a move, or those that trade against one. */
+function Kinds({ kind, onKind }: { kind: Kind | null; onKind: (kind: Kind | null) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Kind of method shown">
+      <button type="button" className="btn" aria-pressed={kind == null} onClick={() => onKind(null)}>
+        All kinds
+      </button>
+      {KINDS.filter((k) => k.key !== "other").map((k) => (
+        <button key={k.key} type="button" className="btn" aria-pressed={kind === k.key} onClick={() => onKind(k.key)}>
+          {k.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const KIND_SHORT = Object.fromEntries(KINDS.map((k) => [k.key, k.short])) as Record<Kind, string>;
 
 function Scoreboard({
   result,
@@ -143,6 +165,7 @@ function Scoreboard({
           <thead>
             <tr>
               <th style={{ ...pinned, zIndex: 2 }}>Method</th>
+              <th title="Momentum: trades with a move. Mean reversion: trades against a stretched one.">Kind</th>
               <th className="r">Net result</th>
               <th className="r" title="Trades that closed with a profit">
                 Worked
@@ -199,6 +222,7 @@ function Scoreboard({
                       <span className="num text-ink-2">{combo.timeframe}</span>
                     </label>
                   </td>
+                  <td className="text-ink-2">{KIND_SHORT[kindOf(combo)]}</td>
                   <td className="r num">{tally.trades ? <Result value={tally.net} /> : <span className="text-ink-3">no trade</span>}</td>
                   <td className="r num">{tally.trades ? tally.wins.toLocaleString("en-US") : ""}</td>
                   <td className="r num">{tally.trades ? tally.losses.toLocaleString("en-US") : ""}</td>
@@ -223,9 +247,10 @@ function Scoreboard({
         </table>
       </div>
       <p className="note m-0 border-t border-line px-3 py-2">
-        A trade “worked” when it closed with a profit after the spread. RAND enters at random: what the trading rules
-        make on their own, and the line a method has to beat. Tick up to {MAX_PICKS} methods to follow them day by day
-        below.
+        A trade “worked” when it closed with a profit after the spread. Momentum methods trade with a move (trend
+        followers and breakouts); mean-reversion methods trade against a stretched one (bands, oscillators, levels). RAND
+        enters at random: what the trading rules make on their own, and the line a method has to beat. Tick up to{" "}
+        {MAX_PICKS} methods to follow them day by day below.
         {split
           ? " A method that only shines on the earlier days, or only on the later ones, has most likely been lucky."
           : ""}
@@ -252,9 +277,9 @@ function Days({
   const combos = picks.map((id) => result.combos.find((c) => c.id === id)).filter((c) => c != null);
   const pinned = { position: "sticky", left: 0, background: "var(--color-panel)" } as const;
   const firstEarlier = result.split_day ? rows.findIndex((row) => !row.later) : -1;
-  const columns = 3 + combos.length;
+  const columns = 4 + combos.length;
   return (
-    <Panel title="Day by day" aside={<span>newest first; click a day to see every signal of it on the chart below</span>}>
+    <Panel title="Day by day" aside={<span>newest first; click a day to see it on the chart below</span>}>
       <div className="max-h-[460px] overflow-auto">
         <table className="data sticky-head">
           <thead>
@@ -268,8 +293,17 @@ function Days({
                   <span className="text-ink">{methodLabel(combo)}</span>
                 </th>
               ))}
-              <th className="r" title="How many of the methods made money that day, and how many lost">
-                Methods up / down
+              <th
+                className="r"
+                title="What all momentum methods made that day, added up, and how many of them made money and lost. A day on which they made money was a day that trended."
+              >
+                Momentum methods
+              </th>
+              <th
+                className="r"
+                title="What all mean-reversion methods made that day, added up, and how many of them made money and lost. A day on which they made money was a day that stayed in its range."
+              >
+                Mean-reversion methods
               </th>
             </tr>
           </thead>
@@ -287,9 +321,11 @@ function Days({
           </tbody>
         </table>
       </div>
-      <p className="note m-0 max-w-[120ch] border-t border-line px-3 py-2">
+      <p className="note m-0 border-t border-line px-3 py-2">
         Each cell: trades that worked ✓ and that failed ✗, then the result of the day. ★ marks the best of the ticked
-        methods.{" "}
+        methods. The last two columns add up every method of a kind: how many of them made money that day (up), how many
+        lost (down), and what they made together. Momentum methods earning while mean-reversion methods lose is what a
+        trending day looks like.{" "}
         {follow ? (
           <>
             The best method of a day is known only when the day is over. Trading each day the method that was best the day
@@ -367,11 +403,28 @@ function DayLine({
             )}
           </td>
         ))}
-        <td className="r num">
-          {row.up} / {row.down}
-        </td>
+        <KindCell day={row.kinds.momentum} />
+        <KindCell day={row.kinds.reversion} />
       </tr>
     </>
+  );
+}
+
+/** What the methods of one kind made on a day, added up, with how many of them made money and how many lost. */
+function KindCell({ day }: { day: KindDay }) {
+  return (
+    <td className="r num">
+      {day.up + day.down === 0 ? (
+        <span className="text-ink-3">no trade</span>
+      ) : (
+        <>
+          <span className="text-ink-2">
+            {day.up} up, {day.down} down
+          </span>{" "}
+          <Result value={day.net} />
+        </>
+      )}
+    </td>
   );
 }
 
@@ -385,9 +438,9 @@ export function Board({ symbol }: { symbol: string | null }) {
   const [variant, setVariant] = useState<Variant>("all");
   const [sort, setSort] = useState<SortKey>("net");
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
+  const [kind, setKind] = useState<Kind | null>(null);
   const [picked, setPicked] = useState<string[] | null>(null);
   const [day, setDay] = useState<string | null>(null);
-  const [untraded, setUntraded] = useState(true);
   const chart = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(() => {
@@ -458,7 +511,7 @@ export function Board({ symbol }: { symbol: string | null }) {
     () => (data && off.size ? new Set(data.request.timeframes.filter((tf) => !off.has(tf))) : null),
     [data, off],
   );
-  const lines = useMemo(() => (data ? rank(data.combos, variant, sort, filter) : []), [data, variant, sort, filter]);
+  const lines = useMemo(() => (data ? rank(data.combos, variant, sort, filter, kind) : []), [data, variant, sort, filter, kind]);
   const picks = useMemo(() => {
     if (!data) return [];
     if (picked) return picked;
@@ -520,7 +573,12 @@ export function Board({ symbol }: { symbol: string | null }) {
       return next;
     });
   const pick = (id: string) => setPicked(picks.includes(id) ? picks.filter((p) => p !== id) : [...picks, id].slice(0, MAX_PICKS));
-  const filters = data ? <BarLengths all={data.request.timeframes} off={off} onToggle={toggle} /> : null;
+  const filters = data ? (
+    <>
+      <Kinds kind={kind} onKind={setKind} />
+      <BarLengths all={data.request.timeframes} off={off} onToggle={toggle} />
+    </>
+  ) : null;
   const selectDay = (next: string) => {
     setDay(next);
     window.requestAnimationFrame(() => chart.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -684,17 +742,7 @@ export function Board({ symbol }: { symbol: string | null }) {
           />
           <Days result={data} rows={rows} picks={picks} follow={follow} selected={day} onSelect={selectDay} />
           <div ref={chart} className="scroll-mt-2">
-            {day ? (
-              <WindowPanel
-                result={data}
-                day={day}
-                precision={info.price_precision}
-                timeframes={filter}
-                untraded={untraded}
-                onUntraded={setUntraded}
-                filters={filters}
-              />
-            ) : null}
+            {day ? <WindowPanel result={data} day={day} precision={info.price_precision} pip={info.pip_size} /> : null}
           </div>
         </>
       ) : (

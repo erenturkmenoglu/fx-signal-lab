@@ -3,11 +3,12 @@ import type { Link } from "../live";
 import type { SystemStatus } from "../types";
 import { StatePill, type Tone } from "./ui";
 
-export type View = "live" | "lab" | "board";
+export type View = "live" | "lab" | "board" | "setups";
 const PAGES: { view: View; label: string }[] = [
   { view: "live", label: "Live" },
   { view: "lab", label: "Strategy lab" },
   { view: "board", label: "Signal board" },
+  { view: "setups", label: "My setups" },
 ];
 
 const PROVIDER: Record<SystemStatus["provider"]["label"], { tone: Tone; text: string }> = {

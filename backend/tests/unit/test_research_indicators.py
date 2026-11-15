@@ -311,6 +311,61 @@ def test_supertrend_in_a_straight_line_up_never_flips() -> None:
     assert line[-1] == pytest.approx(high[-1] - 4.0, abs=1e-3)
 
 
+# --- trend channel ---------------------------------------------------------------------------
+
+
+def test_a_regression_channel_on_a_straight_line_is_that_line() -> None:
+    values = 1.1 + 0.0002 * np.arange(60.0)
+    middle, upper, lower, slope = ind.regression_channel(values, 20, 2.0)
+    assert np.isnan(middle[:19]).all() and not np.isnan(middle[19:]).any()
+    assert middle[19:] == pytest.approx(values[19:], abs=1e-12) and slope[19:] == pytest.approx(0.0002, abs=1e-12)
+    assert upper[19:] == pytest.approx(middle[19:], abs=1e-9) and lower[19:] == pytest.approx(middle[19:], abs=1e-9)
+
+
+def test_a_regression_channel_by_hand() -> None:
+    # 1, 2, 4: the line through them is y = 5/6 + 1.5 x; at x = 2 it is 23/6; the points miss it by
+    # 1/6, -1/3 and 1/6, so their standard deviation is the root of (1/36 + 4/36 + 1/36) / 3
+    middle, upper, lower, slope = ind.regression_channel([1.0, 2.0, 4.0], 3, 2.0)
+    assert middle[2] == pytest.approx(23 / 6) and slope[2] == pytest.approx(1.5)
+    sigma = (6 / 36 / 3) ** 0.5
+    assert upper[2] == pytest.approx(23 / 6 + 2 * sigma) and lower[2] == pytest.approx(23 / 6 - 2 * sigma)
+
+
+@pytest.mark.parametrize("n", [3, 20, 288, 1440])
+def test_a_regression_channel_is_the_least_squares_line_of_each_window(n: int) -> None:
+    rng = np.random.default_rng(n)
+    values = np.round(1.16 + np.cumsum(rng.normal(0, 0.0001, 6000)), 5)  # prices on the five-decimal grid
+    middle, upper, lower, slope = ind.regression_channel(values, n, 2.5)
+    x = np.arange(n, dtype=np.float64)
+    for i in [n - 1, n, n + 7, 2999, 5999]:
+        window = values[i - n + 1 : i + 1]
+        b, a = np.polyfit(x, window, 1)
+        sigma = np.sqrt(np.mean((window - (a + b * x)) ** 2))
+        # a billionth of a price; short windows are worked out on the windows themselves and are tighter still
+        assert middle[i] == pytest.approx(a + b * (n - 1), abs=1e-9)
+        assert slope[i] == pytest.approx(b, abs=1e-11)
+        assert upper[i] - middle[i] == pytest.approx(2.5 * sigma, abs=1e-9)
+        assert middle[i] - lower[i] == pytest.approx(2.5 * sigma, abs=1e-9)
+
+
+def test_a_channel_drawn_ahead_is_the_earlier_line_extended() -> None:
+    _, _, close = ohlc(120, seed=5)
+    middle, upper, _, slope = ind.regression_channel(close, 30, 2.0)
+    ahead = ind.regression_channel(close, 30, 2.0, ahead=4)
+    assert np.isnan(ahead[0][:33]).all() and not np.isnan(ahead[0][33:]).any()
+    for i in (33, 60, 119):
+        assert ahead[0][i] == pytest.approx(middle[i - 4] + 4 * slope[i - 4], abs=1e-12)
+        assert ahead[1][i] - ahead[0][i] == pytest.approx(upper[i - 4] - middle[i - 4], abs=1e-12)
+        assert ahead[3][i] == slope[i - 4]
+    # the newest values do not move it: that is the point of drawing it ahead
+    changed = close.copy()
+    changed[-4:] += 5.0
+    assert np.array_equal(ind.regression_channel(changed, 30, 2.0, ahead=4)[0], ahead[0], equal_nan=True)
+    with pytest.raises(ValueError, match="at least 3"):
+        ind.regression_channel(close, 2)
+    assert np.isnan(ind.regression_channel(close[:10], 30)[0]).all()
+
+
 # --- the rule that matters most ------------------------------------------------------------
 
 
@@ -335,6 +390,8 @@ def test_no_indicator_looks_ahead(cut: int) -> None:
         (ind.cci(high, low, close, 14), ind.cci(h, lo, c, 14)),
         *zip(ind.keltner(high, low, close, 14, 10), ind.keltner(h, lo, c, 14, 10), strict=True),
         *zip(ind.supertrend(high, low, close, 10), ind.supertrend(h, lo, c, 10), strict=True),
+        *zip(ind.regression_channel(close, 14), ind.regression_channel(c, 14), strict=True),
+        *zip(ind.regression_channel(close, 14, ahead=1), ind.regression_channel(c, 14, ahead=1), strict=True),
     ]
     for full, short in pairs:
         assert len(short) == cut

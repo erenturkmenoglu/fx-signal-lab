@@ -25,7 +25,9 @@ import numpy as np
 
 from fxlab.domain.instruments import Instrument
 from fxlab.domain.timeframes import TIMEFRAMES, Timeframe, get_timeframe
+from fxlab.research import context as ctx
 from fxlab.research import engine, metrics
+from fxlab.research import indicators as ind
 from fxlab.research.bars import Bars, resample
 from fxlab.research.engine import Execution, Outcome
 from fxlab.research.report import (
@@ -54,6 +56,8 @@ SKIP_CODES = {
 }
 #: the most bars a chart is given in one answer
 MAX_CHART_BARS = 20_000
+#: a straight channel through a window is drawn when the window has at least this many bars
+MIN_STRAIGHT_BARS = 20
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,7 @@ class BoardRequest:
     execution: dict[str, Any] = field(default_factory=dict)
     split: str = "auto"
     chart_timeframe: str = "5m"  # for the signals of a window: the bars drawn under them
+    list_signals: bool = True  # for a window: False leaves the list out (a month is megabytes); the context stays
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> BoardRequest:
@@ -80,6 +85,7 @@ class BoardRequest:
             "execution",
             "split",
             "chart_timeframe",
+            "list_signals",
         }
         unknown = sorted(set(data) - known)
         if unknown:
@@ -93,6 +99,8 @@ class BoardRequest:
                 raise BacktestError(f"{name} must be a list of names")
         if not isinstance(data.get("execution") or {}, dict):
             raise BacktestError("execution must be an object of names and values")
+        if not isinstance(data.get("list_signals", True), bool):
+            raise BacktestError("list_signals must be true or false")
         try:
             start_ms, end_ms = parse_time(data["start"]), parse_time(data["end"])
         except (ValueError, TypeError):
@@ -107,6 +115,7 @@ class BoardRequest:
             execution=dict(data.get("execution") or {}),
             split=str(data.get("split") or "auto"),
             chart_timeframe=str(data.get("chart_timeframe") or "5m"),
+            list_signals=bool(data.get("list_signals", True)),
         )
 
 
@@ -282,6 +291,7 @@ def build_board(
                 "title": strategy.title,
                 "short": strategy.short or strategy.key,
                 "family": strategy.family,
+                "style": strategy.style,
                 "timeframe": tf.code,
                 "signals": int(np.count_nonzero(signals.direction[inside])),
             }
@@ -331,6 +341,11 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[
     whether a position was open when the window began) and may run on past its end, so that a
     trade opened late in the window can finish.  Only signals and bars of the window itself
     are returned.
+
+    With them comes the context of the window, one value per bar of the chart: what the momentum
+    methods were saying, how many mean-reversion signals came, and the trend channel.  A signal
+    counts as part of the window if it was known from its start up to, but not at, its end; what
+    is drawn on a bar is what was known when the bar closed.
     """
     plan = prepare_board(inst, request)
     if plan.base_tf.seconds != base.seconds:
@@ -350,11 +365,22 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[
         )
     ex = plan.execution
     methods = _methods(plan)
+    closes = chart.ts + chart.span_ms
+
+    def bar_of(moment: int) -> int:
+        """The bar of the chart by whose close ``moment`` had come: what is drawn on a bar was known when it closed."""
+        return min(int(np.searchsorted(closes, moment, side="left")), len(chart) - 1)
+
     found: list[dict[str, Any]] = []
+    momentum: list[tuple[Bars, engine.Signals]] = []  # what the momentum methods said, for the context
+    styles: dict[str, str] = {}
     for tf, strategies in methods:
         signal_bars = resample(base, tf.seconds)
         for strategy in strategies:
             signals = strategy.compute(signal_bars, strategy.resolve(), ex.pip_size)
+            styles[f"{strategy.key}@{tf.code}"] = strategy.style
+            if strategy.style == "momentum":
+                momentum.append((signal_bars, signals))
             outcome = engine.run(base, signal_bars, signals, ex)
             trades = iter(outcome.trades)
             for bar, decision in outcome.decisions:
@@ -365,6 +391,7 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[
                 item: dict[str, Any] = {
                     "method": f"{strategy.key}@{tf.code}",
                     "t": known_ms,
+                    "bar": bar_of(known_ms),
                     "d": 1 if signals.direction[bar] > 0 else -1,
                     "potential": round(float(signals.potential_pips[bar]) - ex.spread_pips, 1),
                     "status": SKIP_CODES.get(decision, decision),
@@ -383,6 +410,39 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[
                     )
                 found.append(item)
     found.sort(key=lambda item: (item["t"], item["method"]))
+
+    # what the market was doing, bar of the chart by bar: each value as it was known when that bar closed
+    context = ctx.build_context(base, momentum)
+    row = context.at(closes)
+    known = row >= 0
+    k = np.maximum(row, 0)
+
+    def column(values: Any, digits: int) -> list[float | None]:
+        picked = np.where(known, values[k], np.nan)
+        return [None if np.isnan(v) else round(float(v), digits) for v in picked]
+
+    digits = inst.price_precision + 1
+
+    # The channel of the window as it stands at its end: one straight line through the closes of
+    # the chart with the same band, the way a channel is drawn on a chart.  It is fitted to every
+    # bar of the window, so only its right-hand end was known at the time: for the eye, not for a rule.
+    straight: dict[str, Any] | None = None
+    if len(chart) >= MIN_STRAIGHT_BARS:
+        line, edge, _, step = ind.regression_channel(chart.close, len(chart), ctx.CHANNEL_WIDTH)
+        end, half = float(line[-1]), float(edge[-1] - line[-1])
+        straight = {
+            "width": ctx.CHANNEL_WIDTH,
+            "bars": len(chart),
+            "start": round(end - float(step[-1]) * (len(chart) - 1), digits),  # the middle line at the first bar
+            "end": round(end, digits),  # ... and at the last
+            "half": round(half, digits),  # from the middle line to either edge
+        }
+
+    buys = np.zeros(len(chart), dtype=np.int64)
+    sells = np.zeros(len(chart), dtype=np.int64)
+    for item in found:  # the mean-reversion signals of each bar
+        if styles[item["method"]] == "reversion":
+            (buys if item["d"] > 0 else sells)[item["bar"]] += 1
     return {
         "request": {
             "symbol": inst.symbol,
@@ -403,11 +463,42 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[
                 "short": s.short or s.key,
                 "title": s.title,
                 "family": s.family,
+                "style": s.style,
                 "timeframe": tf.code,
             }
             for tf, strategies in methods
             for s in strategies
         ],
+        "context": {
+            "voters": context.voters,
+            "threshold": context.threshold,
+            # momentum methods pointing up minus those pointing down, and the state that follows from it
+            "votes": [int(v) if ok else None for v, ok in zip(context.votes[k], known, strict=True)],
+            "state": [int(v) if ok else 0 for v, ok in zip(context.state[k], known, strict=True)],
+            # where the state went from up to down or back, with the reading and the price of that moment
+            # (not of the bar of the chart, which may close later): on the bar that closed with it
+            "changes": [
+                {
+                    "t": int(context.known_ms[turn]),
+                    "to": int(context.state[turn]),
+                    "bar": bar_of(int(context.known_ms[turn])),
+                    "votes": int(context.votes[turn]),
+                    "price": round(float(context.close[turn]), digits),
+                }
+                for turn in context.turns()
+                if int(chart.ts[0]) < context.known_ms[turn] <= int(closes[-1])
+            ],
+            # mean-reversion signals that had come by the close of each bar, since the bar before
+            "reversion": {"buys": buys.tolist(), "sells": sells.tolist()},
+            "channel": {
+                "hours": ctx.CHANNEL_HOURS,
+                "width": ctx.CHANNEL_WIDTH,
+                "middle": column(context.middle, digits),
+                "upper": column(context.upper, digits),
+                "lower": column(context.lower, digits),
+                "straight": straight,
+            },
+        },
         "bars": {
             "timeframe": plan.chart_tf.code,
             "seconds": plan.chart_tf.seconds,
@@ -417,5 +508,6 @@ def window_signals(base: Bars, inst: Instrument, request: BoardRequest) -> dict[
             "l": chart.low.tolist(),
             "c": chart.close.tolist(),
         },
-        "signals": found,
+        "signal_count": len(found),
+        "signals": found if request.list_signals else None,
     }

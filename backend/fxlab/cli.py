@@ -277,10 +277,12 @@ def cmd_backtest(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_board(settings: Settings, args: argparse.Namespace) -> int:
-    """Every method at once (``board``), or every signal of a window (``signals``).  JSON in, JSON out."""
+    """Every method at once (``board``), every signal of a window (``signals``), or one of the owner's
+    setups (``setup``).  JSON in, JSON out."""
     from fxlab.research.board import BoardRequest
     from fxlab.research.report import BacktestError
-    from fxlab.services.backtest import run_board, run_window
+    from fxlab.research.setups import SetupRequest
+    from fxlab.services.backtest import run_board, run_setup, run_window
     from fxlab.storage.db import make_engine
 
     registry = _registry(settings)
@@ -292,6 +294,8 @@ def cmd_board(settings: Settings, args: argparse.Namespace) -> int:
     async def run(data: dict[str, Any]) -> dict[str, Any]:
         engine = make_engine(settings.database_url)
         try:
+            if args.command == "setup":
+                return await run_setup(engine, registry, SetupRequest.from_mapping(data))
             request = BoardRequest.from_mapping(data)
             if args.command == "signals":
                 return await run_window(engine, registry, request)
@@ -467,6 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, text in (
         ("board", "run every strategy on every bar length over a period (JSON request, JSON answer)"),
         ("signals", "every signal of every method inside a window (JSON request, JSON answer)"),
+        ("setup", "a setup of your own: chosen methods, a target and a stop (JSON request, JSON answer)"),
     ):
         many = sub.add_parser(name, help=text)
         many.add_argument("--request", metavar="FILE", help="the request as JSON ('-' = standard input)")

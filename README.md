@@ -11,10 +11,11 @@ makes every trading decision.
 and checked against Massive with the market closed; live quotes are verified when the
 market next opens. [docs/PHASE1_REPORT.md](docs/PHASE1_REPORT.md) says exactly what was
 built and what is still unverified. On top of it there is now a **backtest engine** with
-fifteen signal methods, a **strategy lab** page for testing one of them in depth and a
-**signal board** page that runs all of them on every bar length at once
-([docs/BACKTEST.md](docs/BACKTEST.md)); they have been tested on hand-written and random
-prices, not yet on real history. No strategy here is known to be profitable.
+seventeen signal methods, a **strategy lab** page for testing one of them in depth, a
+**signal board** page that runs all of them on every bar length at once, and a **setups**
+page for rules of one's own that also says what the market was doing around the trades
+that failed ([docs/BACKTEST.md](docs/BACKTEST.md)); they have been tested on hand-written
+and random prices, not yet on real history. No strategy here is known to be profitable.
 
 ## What Phase 1 does
 
@@ -103,8 +104,16 @@ of any day with entries, clips, targets and stops marked on it.
 A third page, **Signal board**, is the short way: choose a period, press one button, and
 every method runs on bars of every length in the background. It shows, per method and per
 trading day, how many trades worked and how many failed, which method did best each day,
-and a chart of a day, a week or a month with every signal of every method under the price.
-See [docs/BACKTEST.md](docs/BACKTEST.md).
+what the momentum methods and the mean-reversion methods made each day, and a chart of a
+day, a week or a month with the trend channel on the prices and, under them, what the
+momentum methods said together (with every change of momentum marked) and how many
+mean-reversion signals came.
+
+A fourth page, **My setups**, runs a rule of one's own: chosen methods, "any of them" or
+"all of them agree", a stop and a target. It lists every trade, the result of each day and
+of the period, and asks of the trades that failed what was going on around them: against
+the momentum, outside the trend channel, and whether that is more than chance. Setups are
+saved on the server. See [docs/BACKTEST.md](docs/BACKTEST.md).
 
 All times are UTC.
 

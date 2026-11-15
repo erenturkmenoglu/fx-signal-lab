@@ -225,6 +225,15 @@ function DaysTable({ days, selected, onSelect }: { days: Day[]; selected: string
 
 const TRADE_LIMIT = 400;
 
+/** One more column for the table of trades: what a page knows about a trade beyond the trade itself. */
+export interface TradeColumn {
+  title: string;
+  help?: string;
+  cell: (trade: Trade) => React.ReactNode;
+  /** the cell holds a sentence: it may break into lines instead of pushing the table wide */
+  wide?: boolean;
+}
+
 function TradesTable({
   trades,
   total,
@@ -232,6 +241,7 @@ function TradesTable({
   title,
   focus,
   onFocus,
+  column,
 }: {
   trades: Trade[];
   total: number;
@@ -239,6 +249,7 @@ function TradesTable({
   title: string;
   focus: number | null;
   onFocus: (trade: Trade) => void;
+  column?: TradeColumn;
 }) {
   const shown = trades.slice(-TRADE_LIMIT);
   return (
@@ -258,14 +269,15 @@ function TradesTable({
               <th className="r">#</th>
               <th>Entry</th>
               <th>Side</th>
-              <th className="r">Clips</th>
+              <th className="r">Result</th>
+              <th className="r">Pips</th>
+              <th>Ended by</th>
+              {column ? <th title={column.help}>{column.title}</th> : null}
               <th className="r">Average entry</th>
               <th>Exit</th>
               <th className="r">Exit price</th>
-              <th>Ended by</th>
-              <th className="r">Pips</th>
-              <th className="r">Result</th>
               <th className="r">Held</th>
+              <th className="r">Clips</th>
               <th className="r" title="What the signal saw, after the spread">
                 Potential
               </th>
@@ -277,7 +289,7 @@ function TradesTable({
           <tbody>
             {shown.length === 0 ? (
               <tr>
-                <td colSpan={13} className="text-ink-3">
+                <td colSpan={column ? 14 : 13} className="text-ink-3">
                   No trade on this day.
                 </td>
               </tr>
@@ -300,22 +312,22 @@ function TradesTable({
                   </button>
                 </td>
                 <td className="num">{dateTimeUTC(t.entry_ms)}</td>
-                <td>
-                  <span aria-hidden style={{ color: t.direction === "long" ? "var(--color-up)" : "var(--color-down)" }}>
-                    {t.direction === "long" ? "▲" : "▼"}
-                  </span>{" "}
-                  {t.direction === "long" ? "Buy" : "Sell"}
-                </td>
-                <td className="r num">{t.clips}</td>
-                <td className="r num">{price(t.average_price, precision)}</td>
-                <td className="num">{dateTimeUTC(t.exit_ms).slice(11)}</td>
-                <td className="r num">{price(t.exit_price, precision)}</td>
-                <td>{REASONS[t.reason]}</td>
-                <td className="r num">{signedPips(t.pips)}</td>
+                <td>{t.direction === "long" ? "Buy" : "Sell"}</td>
                 <td className="r num">
                   <Result value={t.pnl} />
                 </td>
+                <td className="r num">{signedPips(t.pips)}</td>
+                <td>{REASONS[t.reason]}</td>
+                {column ? (
+                  <td className="text-ink-2" style={column.wide ? { whiteSpace: "normal", minWidth: "30ch", maxWidth: "52ch" } : undefined}>
+                    {column.cell(t)}
+                  </td>
+                ) : null}
+                <td className="r num">{price(t.average_price, precision)}</td>
+                <td className="num">{dateTimeUTC(t.exit_ms).slice(11)}</td>
+                <td className="r num">{price(t.exit_price, precision)}</td>
                 <td className="r num">{fixed(t.minutes, 0)} min</td>
+                <td className="r num">{t.clips}</td>
                 <td className="r num">{fixed(t.potential_pips, 1)}</td>
                 <td className="r num">{fixed(t.adverse_pips, 1)}</td>
               </tr>
@@ -331,15 +343,26 @@ export function LabResults({
   report,
   precision,
   storedTimeframes,
+  heading,
+  afterSummary,
+  tradeColumn,
+  allTrades = false,
 }: {
   report: Report;
   precision: number;
   storedTimeframes: string[];
+  /** in place of the lines that say what was run: a page that runs something else says it itself */
+  heading?: React.ReactNode;
+  /** shown under the table of results */
+  afterSummary?: React.ReactNode;
+  tradeColumn?: TradeColumn;
+  /** list every trade first, not only the trades of the chosen day */
+  allTrades?: boolean;
 }) {
   const lastTraded = useMemo(() => [...report.daily].reverse().find((d) => d.trades > 0)?.day ?? null, [report.daily]);
   const [day, setDay] = useState<string | null>(lastTraded);
   const [focus, setFocus] = useState<number | null>(null);
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useState(allTrades);
   useEffect(() => {
     setDay(lastTraded);
     setFocus(null);
@@ -361,23 +384,25 @@ export function LabResults({
 
   return (
     <>
-      <div className="panel px-3 py-2">
-        <p className="m-0 text-[14px]">
-          <strong className="font-semibold">{req.strategy_title}</strong> on {req.symbol}: signals from {req.timeframe} bars,
-          trades simulated on {report.data.base_bars.toLocaleString("en-US")} {req.base_timeframe} {report.data.price_basis}{" "}
-          bars from {report.data.first_day} to {report.data.last_day} ({report.data.trading_days} trading days).
-          {report.data.run_in_from ? ` The indicators had the bars from ${report.data.run_in_from.slice(0, 10)} on to settle.` : ""}
-        </p>
-        <p className="note m-0 mt-1">
-          Clips of {units(req.execution.clip_units)} {report.unit_currency}, at most {req.execution.max_clips}; target{" "}
-          {req.execution.target_pips} and stop {req.execution.stop_pips} pips; spread {req.execution.spread_pips}; a signal needs{" "}
-          {req.execution.min_potential_pips} pips of potential. Parameters:{" "}
-          {Object.entries(req.params)
-            .map(([name, value]) => `${name} ${value}`)
-            .join(", ") || "none"}
-          .
-        </p>
-      </div>
+      {heading ?? (
+        <div className="panel px-3 py-2">
+          <p className="m-0 text-[14px]">
+            <strong className="font-semibold">{req.strategy_title}</strong> on {req.symbol}: signals from {req.timeframe} bars,
+            trades simulated on {report.data.base_bars.toLocaleString("en-US")} {req.base_timeframe} {report.data.price_basis}{" "}
+            bars from {report.data.first_day} to {report.data.last_day} ({report.data.trading_days} trading days).
+            {report.data.run_in_from ? ` The indicators had the bars from ${report.data.run_in_from.slice(0, 10)} on to settle.` : ""}
+          </p>
+          <p className="note m-0 mt-1">
+            Clips of {units(req.execution.clip_units)} {report.unit_currency}, at most {req.execution.max_clips}; target{" "}
+            {req.execution.target_pips} and stop {req.execution.stop_pips} pips; spread {req.execution.spread_pips}; a signal needs{" "}
+            {req.execution.min_potential_pips} pips of potential. Parameters:{" "}
+            {Object.entries(req.params)
+              .map(([name, value]) => `${name} ${value}`)
+              .join(", ") || "none"}
+            .
+          </p>
+        </div>
+      )}
 
       {report.warnings.length ? (
         <div role="alert" className="panel px-4 py-3" style={{ borderLeft: "3px solid var(--color-amber)" }}>
@@ -391,6 +416,7 @@ export function LabResults({
       ) : null}
 
       <SummaryTable report={report} />
+      {afterSummary}
       <EquityChart report={report} selected={day} onSelect={selectDay} />
 
       <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
@@ -427,6 +453,7 @@ export function LabResults({
         title={all ? "All trades" : `Trades of ${day ?? "the day"}`}
         focus={focus}
         onFocus={focusTrade}
+        column={tradeColumn}
       />
 
       <Breakdowns report={report} />

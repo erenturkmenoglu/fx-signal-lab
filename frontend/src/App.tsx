@@ -10,16 +10,17 @@ import { QuoteBoard } from "./components/QuoteBoard";
 import { SecondsTape } from "./components/SecondsTape";
 import { Board } from "./board/Board";
 import { Lab } from "./lab/Lab";
+import { Setups } from "./setups/Setups";
 import { useLive } from "./live";
 import type { Job } from "./types";
 
-const viewFromAddress = (): View =>
-  window.location.hash === "#lab" ? "lab" : window.location.hash === "#board" ? "board" : "live";
+const PAGES: Record<string, View> = { "#lab": "lab", "#board": "board", "#setups": "setups" };
+const viewFromAddress = (): View => PAGES[window.location.hash] ?? "live";
 
 export function App({ onSignOut }: { onSignOut?: () => void }) {
   const live = useLive();
   const { status, link } = live;
-  // which page is shown lives in the address (#lab, #board), so a reload or a bookmark comes back to it
+  // which page is shown lives in the address (#lab, #board, #setups), so a reload or a bookmark comes back to it
   const [view, setView] = useState<View>(viewFromAddress);
   useEffect(() => {
     const follow = () => setView(viewFromAddress());
@@ -31,8 +32,9 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
     setView(next);
     window.scrollTo({ top: 0 });
   };
-  // the lab and the board are kept once they have been opened: a result is still there after a look at another page
-  const [opened, setOpened] = useState({ lab: false, board: false });
+  // the lab, the board and the setups are kept once they have been opened: a result is still there after a look
+  // at another page
+  const [opened, setOpened] = useState({ lab: false, board: false, setups: false });
   useEffect(() => {
     if (view !== "live") setOpened((before) => (before[view] ? before : { ...before, [view]: true }));
   }, [view]);
@@ -80,6 +82,11 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
           {opened.board || view === "board" ? (
             <div hidden={view !== "board"}>
               <Board symbol={inst?.symbol ?? null} />
+            </div>
+          ) : null}
+          {opened.setups || view === "setups" ? (
+            <div hidden={view !== "setups"}>
+              <Setups symbol={inst?.symbol ?? null} />
             </div>
           ) : null}
         </>

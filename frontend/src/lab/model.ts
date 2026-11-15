@@ -20,6 +20,7 @@ export interface StrategyInfo {
   params: ParamInfo[];
   short?: string; // a few letters for charts and tables: "RSI"
   family?: string; // reversion, trend, breakout, level, time, benchmark
+  style?: string; // the kind of signal it gives: momentum, reversion or other
 }
 
 export interface HistoryInfo {
@@ -64,6 +65,8 @@ export interface LabInfo {
   timeframes: string[];
   strategies: StrategyInfo[];
   execution: Execution;
+  /** what can be said about a trade from what the market was doing around it */
+  conditions?: { key: string; label: string; when: "entry" | "after" }[];
   history: HistoryInfo[];
 }
 

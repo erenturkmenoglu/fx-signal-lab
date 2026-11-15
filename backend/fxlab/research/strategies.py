@@ -31,6 +31,10 @@ from fxlab.timeutil import DAY_MS, HOUR_MS
 
 Values = Mapping[str, Any]
 
+#: the two camps the families belong to.  A method of one camp fails where the other works: mean
+#: reversion while a move goes on, momentum while the price keeps coming back.
+STYLES = {"reversion": "reversion", "level": "reversion", "trend": "momentum", "breakout": "momentum"}
+
 
 @dataclass(frozen=True)
 class Param:
@@ -93,6 +97,12 @@ class Strategy:
     family: str = "reversion"  # reversion | trend | breakout | level | time | benchmark
     #: its signals follow the clock, not the shape of the bars: one bar length says all there is
     clock_only: bool = False
+
+    @property
+    def style(self) -> str:
+        """What the strategy bets on: that the price comes back (reversion) or that it goes on (momentum)."""
+        return STYLES.get(self.family, "other")
+
     #: raises ValueError when values that are each allowed do not go together
     check: Callable[[Values], None] | None = None
 
@@ -117,6 +127,7 @@ class Strategy:
             "title": self.title,
             "short": self.short or self.key,
             "family": self.family,
+            "style": self.style,
             "summary": self.summary,
             "timeframe": self.timeframe,
             "params": [p.describe() for p in self.params],
@@ -423,6 +434,37 @@ def _session_drift(bars: Bars, p: Values, pip: float) -> Signals:
     return _signals(long, short, expect, expect)
 
 
+def _channel(bars: Bars, p: Values) -> tuple[Floats, Floats, Floats, Floats, int]:
+    """The trend channel of the bars before each bar: (middle, upper, lower, rise over its length, bars)."""
+    n = max(20, round(float(p["hours"]) * 3600 / bars.seconds))
+    # the line of the n bars before this one, extended by one bar: a bar cannot break out of a
+    # channel it is part of
+    middle, upper, lower, slope = ind.regression_channel(bars.close, n, float(p["width"]), ahead=1)
+    return middle, upper, lower, slope * (n - 1), n
+
+
+def _channel_reversion(bars: Bars, p: Values, pip: float) -> Signals:
+    """Back from the edge of the trend channel; by default never against the way the channel points."""
+    middle, upper, lower, rise, _ = _channel(bars, p)
+    long = (bars.low <= lower) & (bars.close > lower)  # dipped to the lower line and closed back inside
+    short = (bars.high >= upper) & (bars.close < upper)
+    if str(p["side"]) == "with":
+        half = upper - middle
+        # a channel that has fallen by more than half its own height is falling: no buying in it
+        long, short = long & ~(rise < -half), short & ~(rise > half)
+    return _signals(long, short, (middle - bars.close) / pip, (bars.close - middle) / pip)
+
+
+def _channel_break(bars: Bars, p: Values, pip: float) -> Signals:
+    """The first close outside the trend channel: the range the price was in no longer holds."""
+    middle, upper, lower, _, _ = _channel(bars, p)
+    above, below = bars.close > upper, bars.close < lower
+    was_above = np.concatenate(([False], above[:-1]))
+    was_below = np.concatenate(([False], below[:-1]))
+    half = (upper - middle) / pip
+    return _signals(above & ~was_above, below & ~was_below, half, half)
+
+
 def _mix(values: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint64]:
     """A fixed scrambling of whole numbers (the finishing step of MurmurHash3)."""
     x = values.copy()
@@ -719,6 +761,65 @@ STRATEGIES: dict[str, Strategy] = {
                 Param("expect_pips", "Expected move (pips)", 10.0, "float", 0, 500),
             ),
             compute=_round_number,
+        ),
+        Strategy(
+            key="channel_reversion",
+            short="CHN",
+            family="reversion",
+            title="Trend channel, back from the edge",
+            summary=(
+                "A straight line through the last day of prices with a band around it (a regression channel).  "
+                "Buys when a bar dips to the lower line and closes back inside, sells at the upper line; by "
+                "default only with the direction of the channel, never into a falling one.  Potential = "
+                "distance to the middle line."
+            ),
+            timeframe="5m",
+            params=(
+                Param(
+                    "hours",
+                    "Channel over (hours)",
+                    24.0,
+                    "float",
+                    1,
+                    720,
+                    help="hours of trading the line is fitted to",
+                ),
+                Param("width", "Half-height (standard deviations)", 2.0, "float", 0.5, 5),
+                Param(
+                    "side",
+                    "Trade",
+                    "with",
+                    "choice",
+                    choices=("with", "both"),
+                    help="with the channel only, or both edges",
+                ),
+            ),
+            compute=_channel_reversion,
+        ),
+        Strategy(
+            key="channel_break",
+            short="CHB",
+            family="breakout",
+            title="Trend channel, break",
+            summary=(
+                "The same channel, the other bet: buys on the first close above the upper line and sells on "
+                "the first close below the lower one.  A break says the range of the last day no longer "
+                "holds.  Potential = half the height of the channel."
+            ),
+            timeframe="5m",
+            params=(
+                Param(
+                    "hours",
+                    "Channel over (hours)",
+                    24.0,
+                    "float",
+                    1,
+                    720,
+                    help="hours of trading the line is fitted to",
+                ),
+                Param("width", "Half-height (standard deviations)", 2.0, "float", 0.5, 5),
+            ),
+            compute=_channel_break,
         ),
         Strategy(
             key="session_drift",

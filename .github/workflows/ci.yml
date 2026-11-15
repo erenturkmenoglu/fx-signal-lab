@@ -277,8 +277,34 @@ jobs:
                       got[day(s['exit_ms'])] += 1
               assert got == combo[rules]['daily']['trades'][-5:], (combo['id'], got, combo[rules]['daily']['trades'][-5:])
           assert len(window['bars']['t']) > 1000 and len(window['methods']) == len(board['combos'])
+          # under the chart, bar by bar: what the momentum methods said, the mean-reversion signals, the trend channel
+          context, bars = window['context'], len(window['bars']['t'])
+          kinds = {m['id']: m['style'] for m in window['methods']}
+          assert context['voters'] == sum(1 for kind in kinds.values() if kind == 'momentum') == 40, context['voters']
+          assert all(len(context[k]) == bars for k in ('votes', 'state')), 'one reading for every bar'
+          assert all(len(context['channel'][k]) == bars for k in ('middle', 'upper', 'lower'))
+          assert all(lo < mid < up for lo, mid, up in zip(*(context['channel'][k] for k in ('lower', 'middle', 'upper'))))
+          # ... and the straight channel of the whole window, for the eye: nearly every close lies inside it
+          line = context['channel']['straight']
+          at = lambda i: line['start'] + (line['end'] - line['start']) * i / (bars - 1)
+          inside = sum(1 for i, close in enumerate(window['bars']['c']) if abs(close - at(i)) <= line['half'])
+          assert line['bars'] == bars and line['half'] > 0 and inside > 0.9 * bars, (line, inside, bars)
+          assert set(context['state']) == {1, -1} and len(context['changes']) > 5, len(context['changes'])
+          reversion = sum(1 for s in window['signals'] if kinds[s['method']] == 'reversion')
+          assert sum(context['reversion']['buys']) + sum(context['reversion']['sells']) == reversion > 100, reversion
           print('ok:', len(board['combos']), 'methods,', sum(c[rules]['trades'] for c in board['combos']), 'trades,',
-                len(window['signals']), 'signals in the last week')"
+                len(window['signals']), 'signals in the last week,', len(context['changes']), 'changes of momentum')"
+          # the page asks for the window without the list of signals: the same context, a fraction of the size
+          python3 -c "
+          import json
+          json.dump({**json.load(open('ask.json')), 'list_signals': False}, open('ask_short.json', 'w'))"
+          curl -fsS -H 'Content-Type: application/json' -d @ask_short.json http://127.0.0.1:8000/api/board/signals > short.json
+          python3 -c "
+          import json, os
+          window, short = json.load(open('window.json')), json.load(open('short.json'))
+          assert short['signals'] is None and short['signal_count'] == len(window['signals']), short['signal_count']
+          assert short['context'] == window['context'] and short['bars'] == window['bars']
+          assert os.path.getsize('short.json') < os.path.getsize('window.json') / 3"
           # a second run cannot be started with a broken request, and the feed is still streaming
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
             -d '{"symbol": "EURUSD", "start": "2026-10-12", "end": "2026-10-31", "strategies": ["martingale"]}' \
@@ -287,6 +313,66 @@ jobs:
           import json, sys
           s = json.load(sys.stdin)
           assert s['connection']['state'] == 'streaming', s['connection']"
+      - name: A setup of one's own is saved, run and asked why its trades failed
+        run: |
+          # saved under its name, read back, and run over the three weeks of the board
+          curl -fsS -X PUT -H 'Content-Type: application/json' \
+            -d '{"name": "RSI or Bollinger", "methods": ["rsi_reversion@5m", "bollinger_reversion@5m"], "mode": "any", "execution": {"target_pips": 5, "stop_pips": 5, "min_potential_pips": 0}}' \
+            http://127.0.0.1:8000/api/setups > saved.json
+          curl -fsS http://127.0.0.1:8000/api/setups > list.json
+          python3 -c "
+          import json
+          saved, listed = json.load(open('saved.json')), json.load(open('list.json'))
+          assert listed == [saved] and saved['id'] == 1 and saved['mode'] == 'any', listed
+          kept = {k: saved[k] for k in ('name', 'methods', 'mode', 'within_minutes', 'skip', 'execution')}
+          period = {'symbol': 'EURUSD', 'start': '2026-10-12', 'end': '2026-10-31'}
+          json.dump({**period, **kept}, open('setup.json', 'w'))
+          # the same rule without the trades against the momentum, and one of its methods alone
+          json.dump({**period, **kept, 'skip': ['against_momentum']}, open('setup_skip.json', 'w'))
+          json.dump({**period, **kept, 'methods': ['rsi_reversion@5m']}, open('setup_one.json', 'w'))
+          alone = {**period, 'strategy': 'rsi_reversion', 'timeframe': '5m', 'execution': kept['execution']}
+          json.dump(alone, open('alone.json', 'w'))"
+          for name in setup setup_skip setup_one; do
+            curl -fsS -H 'Content-Type: application/json' -d @$name.json http://127.0.0.1:8000/api/setups/run > $name.out.json
+          done
+          curl -fsS -H 'Content-Type: application/json' -d @alone.json http://127.0.0.1:8000/api/backtests > alone.out.json
+          python3 -c "
+          import json
+          names = ('setup', 'setup_skip', 'setup_one', 'alone')
+          report, skipped, one, alone = (json.load(open(name + '.out.json')) for name in names)
+          ex = report['request']['execution']
+          assert (ex['max_clips'], ex['stop_pips'], ex['target_pips']) == (1, 5.0, 5.0), ex
+          trades = report['trades']
+          assert len(trades) == report['summary']['trades'] > 50 and len(report['daily']) == 15, len(trades)
+          assert all(t['pnl'] >= -600 for t in trades), 'a loss larger than the stop'
+          # every trade is described, and the table of reasons counts each of them once per condition
+          keys = [c['key'] for c in report['context']['conditions']]
+          assert keys[:3] == ['against_momentum', 'against_channel', 'outside_channel'] and len(keys) == 5, keys
+          assert all(isinstance(t[k], bool) for t in trades for k in keys)
+          why = report['why']
+          assert why['trades'] == len(trades) and why['failed'] == sum(1 for t in trades if t['pnl'] < 0), why['failed']
+          for c in why['conditions']:
+              assert c['with']['trades'] == sum(1 for t in trades if t[c['key']]), c
+              assert c['with']['trades'] + c['without']['trades'] == len(trades), c
+          assert report['context']['voters'] == 40 and report['context']['grid'] == '5m', report['context']
+          # without the trades against the momentum: fewer trades, and none of that kind is left
+          assert 0 < skipped['summary']['trades'] < len(trades), skipped['summary']['trades']
+          assert not any(t['against_momentum'] for t in skipped['trades'])
+          assert skipped['signals']['skipped: against the momentum when it was opened'] > 0, skipped['signals']
+          # one method alone is that method's backtest, trade for trade
+          fields = ('signal_ms', 'entry_ms', 'exit_ms', 'direction', 'entry_price', 'exit_price', 'pnl', 'reason')
+          strip = lambda t: [t[k] for k in fields]
+          assert [strip(t) for t in one['trades']] == [strip(t) for t in alone['trades']] and len(one['trades']) > 20
+          assert one['summary'] == alone['summary']
+          print('ok:', len(trades), 'trades,', why['failed'], 'failed;', skipped['summary']['trades'],
+                'when those against the momentum are left out')"
+          # what cannot be run is refused; a deleted setup is gone
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"symbol": "EURUSD", "start": "2026-10-12", "end": "2026-10-31", "methods": ["martingale@5m"]}' \
+            http://127.0.0.1:8000/api/setups/run)" = "400"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:8000/api/setups/1)" = "204"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:8000/api/setups/1)" = "404"
+          test "$(curl -fsS http://127.0.0.1:8000/api/setups)" = "[]"
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: Logs on failure

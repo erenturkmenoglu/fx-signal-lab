@@ -10,7 +10,7 @@ from fxlab.research.bars import Bars, resample
 from fxlab.research.engine import Signals
 from fxlab.research.strategies import STRATEGIES, Param, get_strategy
 from fxlab.timeutil import MINUTE_MS
-from tests.conftest import utc_ms
+from tests.conftest import T0, utc_ms
 
 PIP = 0.0001
 
@@ -314,6 +314,8 @@ def test_strategies_describe_themselves_for_a_form() -> None:
         "squeeze_breakout",
         "pivot_reversion",
         "round_number",
+        "channel_reversion",
+        "channel_break",
         "session_drift",
         "random_entry",
     ]
@@ -324,6 +326,7 @@ def test_strategies_describe_themselves_for_a_form() -> None:
         described = strategy.describe()
         assert described["key"] == strategy.key and described["title"] and described["summary"]
         assert described["short"] == strategy.short and described["family"] == strategy.family
+        assert described["style"] == strategy.style
         assert described["timeframe"] == "5m"
         for param in described["params"]:
             assert param["kind"] in ("int", "float", "choice") and param["label"]
@@ -586,3 +589,96 @@ def test_random_entry_is_the_same_draw_for_the_same_bar() -> None:
     assert np.array_equal(strategy.signals(later, PIP).direction, sig.direction[777:])
     assert events(strategy.signals(bars, PIP, {"seed": 2})) != got
     assert len(events(strategy.signals(bars, PIP, {"every": 1}))) == 6000
+
+
+# --- the two camps ---------------------------------------------------------------------------
+
+
+def test_every_method_bets_on_a_return_or_on_a_continuation() -> None:
+    styles = {key: strategy.style for key, strategy in STRATEGIES.items()}
+    assert {key for key, style in styles.items() if style == "reversion"} == {
+        "rsi_reversion",
+        "bollinger_reversion",
+        "stochastic_reversion",
+        "cci_reversion",
+        "pivot_reversion",
+        "round_number",
+        "channel_reversion",
+    }
+    assert {key for key, style in styles.items() if style == "momentum"} == {
+        "ema_momentum",
+        "macd_cross",
+        "dmi_cross",
+        "supertrend_flip",
+        "session_breakout",
+        "donchian_breakout",
+        "squeeze_breakout",
+        "channel_break",
+    }
+    # the clock and the dice bet on neither
+    assert {key for key, style in styles.items() if style == "other"} == {"session_drift", "random_entry"}
+
+
+# --- trend channel -----------------------------------------------------------------------------
+
+
+def channel_bars(closes: list[float], lows: list[float] | None = None, highs: list[float] | None = None) -> Bars:
+    """Hourly bars: with one hour of bars per hour, 'hours' is the number of bars the line is fitted to."""
+    rows = []
+    for i, close in enumerate(closes):
+        low = lows[i] if lows else close
+        high = highs[i] if highs else close
+        rows.append((T0 + i * 3_600_000, close, max(high, close), min(low, close), close))
+    return Bars.from_rows(rows, 3600)
+
+
+def test_channel_break_is_the_first_close_outside_the_line_of_the_bars_before() -> None:
+    # twenty hours on a line rising one pip an hour with a wiggle of a pip: a channel two pips either side
+    line = [1.1000 + 0.0001 * i + (0.0001 if i % 2 else -0.0001) for i in range(20)]
+    calm = [1.1020 + 0.0001 * i for i in range(3)]  # goes on along the line: inside
+    bars = channel_bars([*line, *calm, 1.1040, 1.1050, 1.1024, 1.1000])
+    out = get_strategy("channel_break").signals(bars, PIP, {"hours": 20})
+    assert out.direction[:23].tolist() == [0] * 23  # nothing while the price stays in its channel
+    # bar 23 closes far above the upper line: a buy.  Bar 24 is still above it: no second signal.
+    assert out.direction[23:25].tolist() == [1, 0]
+    # bar 26 closes below the lower line of the channel that by now includes the spike: a sell
+    assert out.direction[26] == -1
+    # what it expects is half the height of the channel it broke out of: two standard deviations of
+    # the wiggle of a pip around the line
+    middle, upper, _, _ = ind.regression_channel(bars.close, 20, 2.0, ahead=1)
+    assert (
+        out.potential_pips[23] == pytest.approx((upper[23] - middle[23]) / PIP) and 1.5 < out.potential_pips[23] < 2.5
+    )
+    assert np.isnan(out.potential_pips[22])
+
+
+def test_channel_reversion_trades_back_from_the_edge_and_not_into_a_falling_channel() -> None:
+    flat = [1.1000 + (0.0002 if i % 2 else -0.0002) for i in range(20)]  # a level channel four pips either side
+    closes = [*flat, 1.1000, 1.1000]
+    lows = [*flat, 1.0994, 1.1000]  # bar 20 dips below the lower line (1.0996) and closes back at the middle
+    highs = [*flat, 1.1000, 1.1006]  # bar 21 pokes above the upper line and closes back
+    level = channel_bars(closes, lows, highs)
+    out = get_strategy("channel_reversion").signals(level, PIP, {"hours": 20})
+    assert out.direction[20:].tolist() == [1, -1] and not out.direction[:20].any()
+    # what it expects is the way back to the middle line; here it closed almost on it
+    middle = ind.regression_channel(level.close, 20, 2.0, ahead=1)[0]
+    assert out.potential_pips[20] == pytest.approx((middle[20] - 1.1000) / PIP) and abs(out.potential_pips[20]) < 0.5
+
+    # the same dip in a channel that falls three pips an hour: with the channel only, there is no buying
+    falling = [1.1000 - 0.0003 * i + (0.0002 if i % 2 else -0.0002) for i in range(20)]
+    last = 1.1000 - 0.0003 * 20
+    bars = channel_bars([*falling, last], [*falling, last - 0.0008], [*falling, last])
+    assert get_strategy("channel_reversion").signals(bars, PIP, {"hours": 20}).direction[20] == 0
+    assert get_strategy("channel_reversion").signals(bars, PIP, {"hours": 20, "side": "both"}).direction[20] == 1
+
+
+def test_the_channel_is_measured_in_hours_whatever_the_bars() -> None:
+    rng = np.random.default_rng(4)
+    stamps = T0 + np.arange(600) * 300_000
+    price = np.round(1.16 + np.cumsum(rng.normal(0, 0.0001, 600)), 5)
+    five = Bars(stamps.astype(np.int64), price, price + 0.00005, price - 0.00005, price, 300)
+    out = get_strategy("channel_break").signals(five, PIP, {"hours": 24})
+    assert not out.direction[:288].any()  # a day of five-minute bars is 288 of them: nothing before that
+    assert out.direction[288:].any()
+    short = get_strategy("channel_break").signals(five, PIP, {"hours": 1})  # an hour would be 12 bars: 20 at least
+    assert not short.direction[:20].any() and short.direction[20:60].any()

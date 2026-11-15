@@ -2,25 +2,25 @@ import { describe, expect, it } from "vitest";
 import {
   type BoardResult,
   type Combo,
-  type Method,
-  type Signal,
   type Tally,
-  barAt,
+  type WindowResult,
   boardBody,
-  countSignals,
+  changeRows,
+  countWindow,
   dayRows,
   defaultPicks,
   followTheWinner,
   headline,
-  laneMarks,
-  lanesOf,
+  kindOf,
+  lasted,
   methodLabel,
-  outcomeOf,
+  momentumText,
   presetPeriod,
   rank,
-  signalsByBar,
+  readingAt,
+  straightAt,
+  straightChannel,
   tallyOf,
-  visibleSignals,
   windowBody,
 } from "./model";
 
@@ -54,8 +54,11 @@ function tally(pnl: number[], trades: number[], wins: number[]): Tally {
   };
 }
 
+const STYLE: Record<string, string> = { reversion: "reversion", trend: "momentum", benchmark: "other" };
+
 function combo(strategy: string, short: string, family: string, timeframe: string, all: Tally, one: Tally = all): Combo {
-  return { id: `${strategy}@${timeframe}`, strategy, title: strategy, short, family, timeframe, signals: 10, all, one };
+  const style = STYLE[family];
+  return { id: `${strategy}@${timeframe}`, strategy, title: strategy, short, family, style, timeframe, signals: 10, all, one };
 }
 
 const idle = tally([0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]);
@@ -154,6 +157,14 @@ describe("the scoreboard", () => {
     expect(tallyOf(single, "all").net).toBe(100);
   });
 
+  it("knows the kind of each method and can be narrowed to one kind", () => {
+    expect(combos.map(kindOf)).toEqual(["reversion", "momentum", "other", "reversion", "momentum", "other"]);
+    expect(kindOf({})).toBe("other"); // a board from before methods were classed
+    expect(rank(combos, "all", "net", null, "momentum").map((line) => line.combo.id)).toEqual(["ema_momentum@5m", "ema_momentum@15m"]);
+    expect(rank(combos, "all", "net", new Set(["15m"]), "reversion").map((line) => line.combo.id)).toEqual(["rsi_reversion@15m"]);
+    expect(headline(rank(combos, "all", "net", null, "reversion"))).toMatchObject({ methods: 2, positive: 2, random: null });
+  });
+
   it("can be narrowed to some bar lengths", () => {
     expect(rank(combos, "all", "net", new Set(["15m"])).map((l) => l.combo.id)).toEqual([
       "rsi_reversion@15m",
@@ -229,6 +240,24 @@ describe("day by day", () => {
     expect(narrow.map((row) => row.top?.label ?? null)).toEqual(["RSI 15m", null, "RSI 15m", null]);
   });
 
+  it("adds up each day by kind of method: all momentum methods, all mean-reversion methods", () => {
+    // newest first; the random entries are neither kind and are left out
+    expect(rows.map((row) => row.kinds.momentum)).toEqual([
+      { net: -300, up: 0, down: 1 },
+      { net: -100, up: 0, down: 1 },
+      { net: 900, up: 1, down: 0 },
+      { net: -400, up: 0, down: 1 },
+    ]);
+    expect(rows.map((row) => row.kinds.reversion)).toEqual([
+      { net: 200, up: 1, down: 0 },
+      { net: 300, up: 1, down: 0 },
+      { net: 400, up: 1, down: 1 },
+      { net: 500, up: 1, down: 0 },
+    ]);
+    const narrow = dayRows(result, "all", [], new Set(["15m"]));
+    expect(narrow.map((row) => row.kinds.reversion.net)).toEqual([200, 0, 600, 0]);
+  });
+
   it("tries out following yesterday's winner", () => {
     // day 1 -> RSI 5m (500): next day -200.  day 2 -> EMA 5m (900): next day -100.  day 3 -> RSI 5m (300): next day 0.
     expect(followTheWinner(combos, "all")).toEqual({ days: 3, won: 0, lost: 2, idle: 1, net: -300, baseline: 5 / 9 });
@@ -237,30 +266,48 @@ describe("day by day", () => {
   });
 });
 
-// --- the signals of a window ------------------------------------------------------------------
+// --- a window on the chart: what the methods said together ------------------------------------
 
-const methods: Method[] = [
-  { id: "rsi_reversion@5m", strategy: "rsi_reversion", short: "RSI", title: "RSI reversion", timeframe: "5m", family: "reversion" },
-  { id: "random_entry@5m", strategy: "random_entry", short: "RAND", title: "Random entry", timeframe: "5m", family: "benchmark" },
-  { id: "ema_momentum@5m", strategy: "ema_momentum", short: "EMA", title: "EMA momentum", timeframe: "5m", family: "trend" },
-  { id: "rsi_reversion@15m", strategy: "rsi_reversion", short: "RSI", title: "RSI reversion", timeframe: "15m", family: "reversion" },
-];
-const byId = new Map(methods.map((m) => [m.id, m]));
 const T = Date.UTC(2026, 10, 12, 14, 0, 0);
 const MIN = 60_000;
-// chart bars of five minutes from 14:00, with a hole: no bar at 14:15
-const times = [0, 5, 10, 20, 25].map((minute) => T / 1000 + minute * 60);
-const signals: Signal[] = [
-  { method: "rsi_reversion@5m", t: T + 5 * MIN, d: 1, potential: 8, status: "target", pnl: 500, clips: 1 },
-  { method: "rsi_reversion@15m", t: T + 5 * MIN + 30_000, d: 1, potential: 9, status: "stop", pnl: -900, clips: 3 },
-  { method: "ema_momentum@5m", t: T + 5 * MIN, d: -1, potential: 2, status: "potential" },
-  { method: "random_entry@5m", t: T + 15 * MIN, d: -1, potential: 998, status: "busy" },
-  { method: "ema_momentum@5m", t: T + 25 * MIN, d: 1, potential: 6, status: "time", pnl: 0, clips: 1 },
-  { method: "rsi_reversion@5m", t: T + 40 * MIN, d: -1, potential: 7, status: "hours" },
-];
+// six five-minute bars from 14:00.  Momentum: 8 voters, three more one way than the other make the state.
+const view: WindowResult = {
+  request: { symbol: "EURUSD", start: "2026-11-12T14:00:00Z", end: "2026-11-12T14:30:00Z", chart_timeframe: "5m" },
+  currency: "USD",
+  run_in_from: "2026-10-22T00:00:00.000Z",
+  methods: [
+    { id: "rsi_reversion@5m", strategy: "rsi_reversion", short: "RSI", title: "RSI reversion", timeframe: "5m", style: "reversion" },
+    { id: "ema_momentum@5m", strategy: "ema_momentum", short: "EMA", title: "EMA momentum", timeframe: "5m", style: "momentum" },
+  ],
+  bars: {
+    timeframe: "5m",
+    seconds: 300,
+    t: [0, 5, 10, 15, 20, 25].map((minute) => T + minute * MIN),
+    o: [1.16, 1.1602, 1.1606, 1.1611, 1.1604, 1.1596],
+    h: [1.1603, 1.1607, 1.1612, 1.1612, 1.1605, 1.1597],
+    l: [1.1599, 1.1601, 1.1605, 1.1603, 1.1595, 1.1589],
+    c: [1.1602, 1.1606, 1.1611, 1.1604, 1.1596, 1.159],
+  },
+  context: {
+    voters: 8,
+    threshold: 3,
+    votes: [null, 2, 4, 1, -3, -5],
+    state: [0, 0, 1, 1, -1, -1],
+    changes: [{ t: T + 25 * MIN, to: -1, bar: 4, votes: -3, price: 1.1596 }],
+    reversion: { buys: [0, 0, 0, 0, 1, 2], sells: [0, 1, 2, 0, 0, 0] },
+    channel: {
+      hours: 24,
+      width: 2,
+      middle: [null, 1.1602, 1.1603, 1.1604, 1.1604, 1.1603],
+      upper: [null, 1.1608, 1.1609, 1.161, 1.161, 1.1609],
+      lower: [null, 1.1596, 1.1597, 1.1598, 1.1598, 1.1597],
+    },
+  },
+  signal_count: 9,
+};
 
-describe("the window of signals", () => {
-  it("asks for the trading days that end with the chosen one", () => {
+describe("a window on the chart", () => {
+  it("asks for the trading days that end with the chosen one, without the list of single signals", () => {
     const week = windowBody(result, "2026-11-13", "week");
     expect(week?.from).toBe("2026-11-10"); // the board has four days: the window begins with the first
     expect(week?.body).toEqual({
@@ -269,6 +316,7 @@ describe("the window of signals", () => {
       end: new Date(day(13, 22)).toISOString(), // the last bar began at 21:59 and is a minute long
       base_timeframe: "1m",
       chart_timeframe: "5m",
+      list_signals: false,
     });
     const one = windowBody(result, "2026-11-12", "day");
     expect(one?.from).toBe("2026-11-12");
@@ -284,50 +332,82 @@ describe("the window of signals", () => {
     expect(windowBody(coarse, "2026-11-13", "month")?.body.chart_timeframe).toBe("30m");
   });
 
-  it("says what became of a signal", () => {
-    expect(signals.map(outcomeOf)).toEqual(["won", "lost", "none", "none", "flat", "none"]);
+  it("reads a bar: what was known when it closed", () => {
+    expect(readingAt(view, 2)).toEqual({
+      time: T + 15 * MIN, // the bar that began at 14:10 closed at 14:15
+      close: 1.1611,
+      votes: 4,
+      state: 1,
+      buys: 0,
+      sells: 2,
+      channel: { lower: 1.1597, middle: 1.1603, upper: 1.1609 },
+      where: "above", // 1.1611 is over the upper line
+    });
+    expect(readingAt(view, 3)?.where).toBe("inside");
+    expect(readingAt(view, 5)).toMatchObject({ votes: -5, state: -1, buys: 2, sells: 0, where: "below" });
+    // before anything is known: no reading, no channel
+    expect(readingAt(view, 0)).toMatchObject({ votes: null, state: 0, channel: null, where: null });
+    expect(readingAt(view, 6)).toBeNull();
   });
 
-  it("shows the signals asked for", () => {
-    expect(visibleSignals(signals, byId, null, true)).toHaveLength(6);
-    expect(visibleSignals(signals, byId, null, false).map((s) => s.status)).toEqual(["target", "stop", "time"]);
-    expect(visibleSignals(signals, byId, new Set(["15m"]), true).map((s) => s.method)).toEqual(["rsi_reversion@15m"]);
-    // a signal of a method the window does not know is not shown
-    expect(visibleSignals([{ ...signals[0]!, method: "gone@5m" }], byId, null, true)).toEqual([]);
+  it("knows the straight channel of the window: one line from its first bar to its last", () => {
+    expect(straightAt(view, 0)).toBeNull(); // this window was sent without one
+    const channel = { ...view.context.channel, straight: { width: 2, bars: 6, start: 1.16, end: 1.161, half: 0.0004 } };
+    const drawn = { ...view, context: { ...view.context, channel } };
+    const at = (index: number) => {
+      const edges = straightAt(drawn, index);
+      return edges ? [edges.lower, edges.middle, edges.upper].map((value) => Number(value.toFixed(5))) : null;
+    };
+    expect(at(0)).toEqual([1.1596, 1.16, 1.1604]);
+    expect(at(5)).toEqual([1.1606, 1.161, 1.1614]);
+    expect(at(2)).toEqual([1.16, 1.1604, 1.1608]); // two fifths of the way
+    expect(at(6)).toBeNull();
+    // a bar read against it instead of against the channel known at the time
+    expect(readingAt(drawn, 2, "window")?.where).toBe("above"); // close 1.1611 over 1.1608
+    expect(readingAt(drawn, 2, "rolling")?.where).toBe("above");
+    expect(readingAt(drawn, 3, "window")?.where).toBe("inside");
+    expect(readingAt(drawn, 5, "window")).toMatchObject({ where: "below", votes: -5 }); // close 1.1590 under 1.1606
+    expect(readingAt(view, 2, "window")).toMatchObject({ channel: null, where: null });
+    // in a few numbers: it rises ten pips over the window, four pips to either side; the last close is under it
+    expect(straightChannel(drawn, 0.0001)).toEqual({ rise: 10, half: 4, where: "below" });
+    expect(straightChannel(view, 0.0001)).toBeNull();
+    expect(straightChannel(drawn, 0)).toBeNull();
   });
 
-  it("gives every strategy one lane, kindred strategies together and the random entries last", () => {
-    expect(lanesOf(methods).map((lane) => lane.short)).toEqual(["RSI", "EMA", "RAND"]);
+  it("says the momentum reading in words", () => {
+    expect(momentumText(readingAt(view, 2)!, 8)).toBe("+4 of 8: up");
+    expect(momentumText(readingAt(view, 5)!, 8)).toBe("−5 of 8: down");
+    expect(momentumText(readingAt(view, 1)!, 8)).toBe("+2 of 8: not decided");
+    // the state stays what it was until enough methods point the other way
+    expect(momentumText(readingAt(view, 3)!, 8)).toBe("+1 of 8: up");
+    expect(momentumText(readingAt(view, 0)!, 8)).toBe("not known yet");
   });
 
-  it("finds the chart bar of a moment, and the next one where there is a hole", () => {
-    expect(barAt(times, 300, T + 7 * MIN)).toBe(times[1]);
-    expect(barAt(times, 300, T + 15 * MIN)).toBe(times[3]); // no bar at 14:15: the one at 14:20
-    expect(barAt(times, 300, T + 40 * MIN)).toBeNull(); // after the last bar
-    expect(barAt(times, 300, T - 60 * MIN)).toBe(times[0]);
-  });
-
-  it("puts the signals of one strategy and direction in one chart bar under one mark", () => {
-    const lanes = lanesOf(methods);
-    const marks = laneMarks(signals, byId, lanes, times, 300);
-    expect(marks.map((m) => [m.time - T / 1000, lanes[m.lane]?.short, m.direction, m.outcome, m.signals.length])).toEqual([
-      [300, "RSI", 1, "lost", 2], // +500 on five-minute bars and -900 on fifteen-minute bars: together a loss
-      [300, "EMA", -1, "none", 1],
-      [1200, "RAND", -1, "none", 1], // known at 14:15, where the chart has a hole: on the next bar
-      [1500, "EMA", 1, "flat", 1],
-      // the signal at 14:40 is after the last bar of the chart and has no mark
+  it("lists the momentum changes, newest first, with how long the state before had lasted", () => {
+    expect(changeRows(view)).toEqual([{ t: T + 25 * MIN, to: -1, bar: 4, price: 1.1596, votes: -3, lasted: null }]);
+    const earlier = { t: T + 15 * MIN, to: 1, bar: 2, votes: 4, price: 1.1611 };
+    const two = { ...view, context: { ...view.context, changes: [earlier, ...view.context.changes] } };
+    expect(changeRows(two).map((row) => [row.to, row.bar, row.lasted])).toEqual([
+      [-1, 4, 10 * MIN],
+      [1, 2, null], // what was before it began before the window
     ]);
   });
 
-  it("lists the signals of a bar with the traded ones first", () => {
-    const bars = signalsByBar(signals, times, 300);
-    expect(bars.get(times[1]!)?.map((s) => s.method)).toEqual(["rsi_reversion@5m", "rsi_reversion@15m", "ema_momentum@5m"]);
-    expect(bars.get(times[3]!)?.map((s) => s.method)).toEqual(["random_entry@5m"]);
-    expect(bars.has(times[0]!)).toBe(false);
+  it("counts what a window amounts to", () => {
+    expect(countWindow(view)).toEqual({
+      bars: 6,
+      changes: 1,
+      up: 2,
+      down: 2,
+      buys: 3,
+      sells: 3,
+      // two sells while momentum was up, three buys while it was down; the sell before it was decided is not counted
+      against: 5,
+      outside: 3, // 14:10 above; 14:20 and 14:25 below
+    });
   });
 
-  it("counts signals, trades and what they made", () => {
-    expect(countSignals(signals)).toEqual({ signals: 6, traded: 3, won: 1, lost: 1, net: -400 });
-    expect(countSignals([])).toEqual({ signals: 0, traded: 0, won: 0, lost: 0, net: 0 });
+  it("writes a length of time", () => {
+    expect([40 * MIN, 60 * MIN, 200 * MIN, 24 * 60 * MIN, 52 * 60 * MIN].map(lasted)).toEqual(["40 min", "1 h", "3 h 20 min", "1 d", "2 d 4 h"]);
   });
 });

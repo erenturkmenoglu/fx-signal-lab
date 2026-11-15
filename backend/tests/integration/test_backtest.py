@@ -392,7 +392,10 @@ def test_the_strategies_command(cli_env: pytest.MonkeyPatch, capsys: pytest.Capt
         "ema_momentum",
         "session_breakout",
     ]
-    assert len(listed) == 15 and listed[-1]["family"] == "benchmark" and listed[0]["short"] == "RSI"
+    assert len(listed) == 17 and listed[-1]["family"] == "benchmark" and listed[0]["short"] == "RSI"
+    # what kind of signal a strategy gives: for the trend, against a move, or neither
+    assert {s["style"] for s in listed} == {"momentum", "reversion", "other"}
+    assert [s["key"] for s in listed if s["style"] == "other"] == ["session_drift", "random_entry"]
 
 
 def test_the_history_command_splits_a_long_range_into_jobs(

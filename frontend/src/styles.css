@@ -140,6 +140,29 @@ table.sticky-head thead th {
   box-shadow: inset 0 -1px 0 var(--color-line);
 }
 
+/* a grid of tick boxes: strategies down, bar lengths across */
+table.matrix th.c,
+table.matrix td.c {
+  text-align: center;
+  padding-left: 6px;
+  padding-right: 6px;
+  width: 3.4rem;
+}
+table.matrix td {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+table.matrix input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  vertical-align: middle;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-amber);
+}
+
 .btn {
   font: inherit;
   font-size: 13px;

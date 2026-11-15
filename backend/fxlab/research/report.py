@@ -277,11 +277,63 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
     strategy, base_tf, tf, params, ex = plan.strategy, plan.base_tf, plan.tf, plan.params, plan.execution
     if base_tf.seconds != base.seconds:
         raise BacktestError("the bars given are not of the base timeframe")
+
     warnings: list[str] = []
     base, shown = trading_bars(base, inst, request.start_ms, warnings)
     signal_bars = resample(base, tf.seconds)
     signals = strategy.compute(signal_bars, params, ex.pip_size)
-    outcome = engine.since(engine.run(base, signal_bars, signals, ex), signal_bars, request.start_ms)
+    report, _ = report_of(
+        base=base,
+        shown=shown,
+        inst=inst,
+        ex=ex,
+        signal_bars=signal_bars,
+        signals=signals,
+        start_ms=request.start_ms,
+        end_ms=request.end_ms,
+        split=request.split,
+        tf=tf,
+        base_tf=base_tf,
+        warnings=warnings,
+        request={
+            "symbol": inst.symbol,
+            "strategy": strategy.key,
+            "strategy_title": strategy.title,
+            "start": iso(request.start_ms),
+            "end": iso(request.end_ms),
+            "timeframe": tf.code,
+            "base_timeframe": base_tf.code,
+            "params": params,
+            "execution": asdict(ex),
+            "split": request.split,
+        },
+    )
+    return report
+
+
+def report_of(
+    *,
+    base: Bars,
+    shown: Bars,
+    inst: Instrument,
+    ex: Execution,
+    signal_bars: Bars,
+    signals: engine.Signals,
+    start_ms: int,
+    end_ms: int,
+    split: str,
+    tf: Timeframe,
+    base_tf: Timeframe,
+    warnings: list[str],
+    request: dict[str, Any],
+) -> tuple[dict[str, Any], list[engine.Trade]]:
+    """Trade ``signals`` on ``base`` and put what came of it into the shape every report has.
+
+    Returns the report and the trades behind its ``trades`` rows, in the same order.  ``shown``
+    is the part of ``base`` that makes up the period (see ``trading_bars``); ``request`` is
+    echoed as the report's own description of what was asked.
+    """
+    outcome = engine.since(engine.run(base, signal_bars, signals, ex), signal_bars, start_ms)
 
     tz, rollover = inst.session.tz, inst.session.daily_rollover
     spans = metrics.day_spans(shown.ts, tz, rollover)
@@ -295,23 +347,12 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
     rows = rows_of(outcome.trades)
     daily = metrics.daily_rows(rows, day_names, pip_value, spans)
     report: dict[str, Any] = {
-        "request": {
-            "symbol": inst.symbol,
-            "strategy": strategy.key,
-            "strategy_title": strategy.title,
-            "start": iso(request.start_ms),
-            "end": iso(request.end_ms),
-            "timeframe": tf.code,
-            "base_timeframe": base_tf.code,
-            "params": params,
-            "execution": asdict(ex),
-            "split": request.split,
-        },
+        "request": request,
         "currency": inst.quote,
         "unit_currency": inst.base,
         "pip_value": pip_value,
         "data": {
-            **data_section(shown, tf, base_tf, int(np.count_nonzero(signal_bars.ts >= request.start_ms)), day_names),
+            **data_section(shown, tf, base_tf, int(np.count_nonzero(signal_bars.ts >= start_ms)), day_names),
             "run_in_from": run_in_section(base, shown, warnings),
         },
         "signals": dict(outcome.counters),
@@ -321,7 +362,7 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         "trades": rows,
     }
 
-    split_day = split_day_of(request.split, day_names, warnings)
+    split_day = split_day_of(split, day_names, warnings)
     report["split_day"] = split_day
     if split_day is not None:
         for name, later in (("in_sample", False), ("out_of_sample", True)):
@@ -330,9 +371,7 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
             report[name] = _part(part_rows, metrics.daily_rows(part_rows, part_names, pip_value), pip_value)
 
     if ex.max_clips > 1:  # the same signals, one clip only: what adding to positions changed
-        single = engine.since(
-            engine.run(base, signal_bars, signals, replace(ex, max_clips=1)), signal_bars, request.start_ms
-        )
+        single = engine.since(engine.run(base, signal_bars, signals, replace(ex, max_clips=1)), signal_bars, start_ms)
         single_rows = rows_of(single.trades)
         single_daily = metrics.daily_rows(single_rows, day_names, pip_value)
         report["without_adding"] = {
@@ -347,13 +386,13 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         warnings.append(f"Only {summary['trades']} trades: too few to tell skill from luck.")
     if any(r["reason"] == "end_of_data" for r in rows):
         warnings.append("The last position was still open when the data ended; it is valued at the last price.")
-    if request.start_ms + 4 * DAY_MS < int(shown.ts[0]) or int(shown.ts[-1]) + 4 * DAY_MS < request.end_ms:
+    if start_ms + 4 * DAY_MS < int(shown.ts[0]) or int(shown.ts[-1]) + 4 * DAY_MS < end_ms:
         warnings.append(
             f"The stored history covers {iso(int(shown.ts[0]))} to {iso(int(shown.ts[-1]))} only, "
             "less than the period asked for."
         )
     report["warnings"] = warnings
-    return report
+    return report, outcome.trades
 
 
 def get_strategy_or_fail(key: str) -> Strategy:
