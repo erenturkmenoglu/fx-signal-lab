@@ -270,13 +270,13 @@ async def verify_provider(
         )
 
         start, end = recent_open_window(probe, now)
-        window = {"from": iso(start), "to": iso(end)}
 
         # 3 + 4. historical aggregates
         for name, multiplier, timespan, a, b in (
             ("history_minute_aggregates", 1, "minute", start, end),
             ("history_second_aggregates", 1, "second", end - 2 * MINUTE_MS, end),
         ):
+            window = {"from": iso(a), "to": iso(b)}  # the window this check asked for
             try:
                 bars = [
                     bar
@@ -293,6 +293,8 @@ async def verify_provider(
                             last=iso(bars[-1].get("t")),
                             sample=bars[0],
                             window=window,
+                            # "n" is the number of quotes in a bar: the provider's own count
+                            quotes_in_window=sum(n for n in (bar.get("n") for bar in bars) if isinstance(n, int)),
                         )
                     )
                 else:
@@ -309,10 +311,12 @@ async def verify_provider(
                 checks.append(_check(name, st, **detail))
 
         # 5. historical quotes
+        window = {"from": iso(end - MINUTE_MS), "to": iso(end)}
+        quotes_limit = 1000
         try:
             quotes: list[dict[str, Any]] = []
             async for page in rest.iter_quotes(
-                rest_quotes_ticker(probe), gte_ms=end - MINUTE_MS, lt_ms=end, limit=1000
+                rest_quotes_ticker(probe), gte_ms=end - MINUTE_MS, lt_ms=end, limit=quotes_limit
             ):
                 quotes.extend(page)
                 break  # one page is enough for a probe
@@ -324,6 +328,7 @@ async def verify_provider(
                         "history_quotes",
                         "ok",
                         quotes=len(quotes),
+                        whole_window=len(quotes) < quotes_limit,  # False: only the first page was read
                         sample=quotes[0],
                         timestamp_resolution="1 second" if stamps and whole_seconds == len(stamps) else "sub-second",
                         window=window,

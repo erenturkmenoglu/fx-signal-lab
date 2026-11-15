@@ -13,6 +13,7 @@ from fxlab.clock import SystemClock
 from fxlab.config import Settings
 from fxlab.domain.instruments import InstrumentRegistry
 from fxlab.services.provider_check import format_report, recent_open_window, verify_provider
+from fxlab.timeutil import parse_time
 from tests.conftest import utc_ms
 from tests.support.fake_massive import FakeMassiveServer
 
@@ -81,8 +82,20 @@ async def test_full_capability_report(server: FakeMassiveServer, registry: Instr
     ws = next(c for c in report["checks"] if c["name"] == "websocket")["detail"]
     assert ws["quotes_received"] > 5 and ws["channel"] == "C.EUR-USD" and ws["sample"]["symbol"] == "EURUSD"
     assert ws["latency_ms"]["n"] > 0
-    quotes = next(c for c in report["checks"] if c["name"] == "history_quotes")["detail"]
+    details = {c["name"]: c["detail"] for c in report["checks"]}
+    quotes = details["history_quotes"]
     assert quotes["timestamp_resolution"] == "1 second"  # the seeded tape uses whole-second stamps
+    assert quotes["whole_window"] is True and quotes["quotes"] > 0
+
+    # every check reports the window it really asked for
+    def span_ms(name: str) -> int:
+        window = details[name]["window"]
+        return parse_time(window["to"]) - parse_time(window["from"])
+
+    assert span_ms("history_second_aggregates") == 120_000 and span_ms("history_quotes") == 60_000
+    assert span_ms("history_minute_aggregates") > span_ms("history_second_aggregates")
+    seconds = details["history_second_aggregates"]
+    assert seconds["quotes_in_window"] >= seconds["bars"] > 0  # the provider's own count of quotes
     assert report["summary"] == {
         "live_feed_verified": True,
         "history_verified": True,

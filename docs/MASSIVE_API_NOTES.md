@@ -7,9 +7,9 @@ Massive is the new name of Polygon.io; hosts moved from `*.polygon.io` to `*.mas
 
 > **Status of the integration:** implemented from the documentation below and tested
 > end to end against a local server that speaks the documented protocol
-> (`backend/tests/support/fake_massive.py`). It has **not** been run against Massive's
-> production service: the build environment had no API key and no network route to
-> `api.massive.com`. Run `fxlab verify-provider` with your key to close that gap.
+> (`backend/tests/support/fake_massive.py`). `fxlab verify-provider` ran against
+> Massive's production service once, on 15 November 2026 with the market closed:
+> section 4 says what that settled. No live quote has been received yet.
 
 ## 1. Verified from documentation
 
@@ -101,6 +101,38 @@ Each item is handled defensively; `fxlab verify-provider` reports on most of the
    subscription. They are marked `unverified` until the reference check runs.
 8. How quickly `/v3/quotes` contains quotes that were just published (gap backfill waits
    60 s after a reconnect before asking).
+
+## 4. First run against production (15 November 2026, market closed)
+
+`make verify` on the server, probe pair EUR/USD, window: the last 30 minutes before the
+weekly close of Friday 13 November (21:30 to 22:00 UTC).
+
+Settled:
+
+* **Points 1 and 6, the handshake.** `wss://socket.massive.com/forex` greeted, accepted
+  the key, accepted the subscription to `C.EUR-USD` and confirmed it with a `success`
+  status. What the `p` field of a quote looks like is still open.
+* **Point 7, the pairs.** The reference endpoint lists all eight configured pairs,
+  USD/TRY, USD/ZAR and USD/PLN included.
+* **REST shapes.** Market status, minute and second bars, historical quotes and the
+  last quote came back in the documented shapes: bars as `v, vw, o, c, h, l, t, n` with
+  `v` equal to `n`, quotes as `ask_exchange, ask_price, bid_exchange, bid_price,
+  participant_timestamp`, the last quote as `ask, bid, exchange, timestamp`.
+* **Point 5, in part.** Second bars work on the Starter plan: 113 bars for the last 120
+  seconds.
+
+New facts:
+
+* **Historical quotes are stamped in whole seconds.** All 109 quotes of the last minute
+  had a `participant_timestamp` on a full second, and so had the last quote. Section 3,
+  point 2 (the stream's `t`) is still open, but whole seconds are now the likely answer.
+* **Quote rate at a quiet time (point 3, in part).** 109 quotes in the last minute
+  before the close, 83 in the minute at 21:30, a quote in 113 of the last 120 seconds:
+  1.4 to 1.8 quotes a second. Busy hours are not known yet. No quote arrived on the
+  stream in 20 seconds on a Sunday morning, as expected with the market closed.
+
+Still open: points 2, 4 and 8, the `p` field, the quote rate in busy hours, and whether
+the stream carries the same quotes as `/v3/quotes` (to be compared once live ticks exist).
 
 [ws-quotes]: https://massive.com/docs/websocket/forex/quotes
 [ws-cas]: https://massive.com/docs/websocket/forex/aggregates-per-second.md

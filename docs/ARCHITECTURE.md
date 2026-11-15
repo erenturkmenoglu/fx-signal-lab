@@ -125,7 +125,9 @@ Applied in order; every outcome is counted per instrument and shown on the dashb
    local clock (1.5 s ahead is accepted but flags clock skew)
 4. crossed quotes (ask below bid) are rejected; locked quotes are accepted
 5. spread above the pair's `max_spread_pips` is rejected
-6. an exact repeat of the previous accepted quote is a duplicate
+6. an exact repeat of the previous accepted quote (same sub-second timestamp, prices
+   and venue) is a duplicate. With a whole-second timestamp a repeat counts as a quote
+   of its own: the timestamp cannot tell two quotes apart, and the provider counts both
 7. a quote older than the one in force is `late`: stored as a tick, not applied
 8. a mid more than `max_jump_pct` away from the last accepted mid is an outlier, unless
    `jump_confirm_quotes` consecutive quotes agree on the new level (a real level shift)
@@ -250,6 +252,8 @@ quotes, and the ticks recovered for it continue after the last one captured live
    incomplete when recovery runs.
 3. **Bars are mid prices with bid and ask at the close.** Exact bid and ask paths are
    in `quote_ticks` for as long as ticks are retained.
-4. **Adjacent-only duplicate detection.** With whole-second provider timestamps a
-   wider window would delete real flip-flop quotes.
+4. **Duplicate detection is adjacent-only and needs sub-second timestamps.** Massive
+   stamps historical quotes in whole seconds (seen on 15 November 2026). A wider window
+   would delete real flip-flop quotes there, and dropping equal neighbours would make
+   recovered seconds count fewer quotes than the provider's own bars do.
 5. **The dashboard has no authentication yet** and is bound to localhost.

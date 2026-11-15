@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import math
 import random
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -23,9 +24,10 @@ from fxlab.config import Settings
 from fxlab.domain.instruments import InstrumentRegistry
 from fxlab.marketdata.base import ConnectionState
 from fxlab.pipeline.ingestion import IngestionService
+from fxlab.services.reconcile import format_reconciliation, reconcile
 from fxlab.storage import repo
 from fxlab.storage.guard import DataModeMismatchError
-from fxlab.timeutil import SECOND_MS, dt_to_ms, floor_ms
+from fxlab.timeutil import SECOND_MS, dt_to_ms, floor_ms, iso
 from tests.conftest import INSTRUMENTS_YAML, T0, utc_ms
 from tests.support.clocks import OffsetClock
 from tests.support.fake_massive import FakeMassive, FakeMassiveServer
@@ -554,6 +556,272 @@ async def test_a_reconnect_of_a_few_seconds_is_recovered_too(
     inside = [o for o in obs if gap["start_ms"] <= dt_to_ms(o.ts) < gap["end_ms"]]
     assert len(inside) == gap["seconds"] and {o.status for o in inside} == {"fresh"}
     assert not [o for o in obs if o.status in ("stale", "missing")]
+
+
+# ------------------------------------------------------ whole-second provider timestamps ----
+# Massive's /v3/quotes returned whole-second timestamps for EUR/USD when it was first run against
+# production (15 November 2026).  Recovered quotes therefore cannot be ordered against live
+# ones inside a second, and several quotes legitimately share one timestamp.
+
+
+def tape_in_second(fake: FakeMassive, second_ms: int) -> list[dict[str, Any]]:
+    return [q for q in fake.tape if second_ms <= q["t"] < second_ms + 1000]
+
+
+def per_second(ticks: list[Any]) -> dict[int, int]:
+    return dict(Counter(floor_ms(dt_to_ms(t.source_ts), SECOND_MS) for t in ticks))
+
+
+async def test_outage_is_recovered_from_history_stamped_in_whole_seconds(
+    engine: AsyncEngine, registry: InstrumentRegistry, migrated_database: str, server: FakeMassiveServer
+) -> None:
+    clock = OffsetClock(T0)
+    fake = server.fake
+    fake.history_resolution_ms = 1000  # the stream keeps milliseconds
+    market = Market(fake, clock)
+    service = IngestionService(massive_settings(server, migrated_database), registry, engine, clock=clock)
+    await service.start()
+    market.start()
+    try:
+        await wait_for(lambda: streaming(service), what="streaming")
+        await asyncio.sleep(3.2)
+        fake.silent = True
+        await fake.drop_connections()
+        await asyncio.sleep(4.5)
+        fake.silent = False
+
+        async def gap_filled() -> bool:
+            async with engine.connect() as conn:
+                return bool(await repo.list_gaps(conn, status="filled"))
+
+        await wait_for(gap_filled, timeout=15, what="gap backfill")
+        await asyncio.sleep(1.5)
+    finally:
+        await market.stop()
+        await service.stop()
+
+    async with engine.connect() as conn:
+        (gap,) = await repo.list_gaps(conn)
+    assert (gap["kind"], gap["status"]) == ("feed_outage", "filled")
+    assert gap["detail"]["rejected"] == 0 and gap["detail"]["accepted"] == gap["detail"]["provider_quotes"] > 20
+
+    # the grid: contiguous, and every recovered second is exactly what the provider published in it
+    obs = await fetch_all(
+        engine, "SELECT ts, status, source, n_quotes, bid, ask, mid_high, mid_low FROM obs_1s ORDER BY ts"
+    )
+    seconds = [dt_to_ms(o.ts) for o in obs]
+    assert seconds == list(range(seconds[0], seconds[0] + len(seconds) * 1000, 1000))
+    assert not [o for o in obs if o.status in ("stale", "missing")]
+    recovered = [o for o in obs if o.source == "backfill"]
+    assert len(recovered) >= 3
+    for o in recovered:
+        tape = tape_in_second(fake, dt_to_ms(o.ts))
+        assert o.status == "fresh" and o.n_quotes == len(tape) > 0
+        assert (o.bid, o.ask) == (tape[-1]["b"], tape[-1]["a"])  # the last quote of the second, in publication order
+        mids = [(q["b"] + q["a"]) / 2 for q in tape]
+        assert o.mid_high == pytest.approx(max(mids)) and o.mid_low == pytest.approx(min(mids))
+
+    # ticks: recovered ones carry the provider's whole-second stamps, live ones their milliseconds
+    ticks = await fetch_all(engine, "SELECT source_ts, recv_ts, flags FROM quote_ticks ORDER BY source_ts")
+    backfilled = [t for t in ticks if t.flags & 2]
+    live = [t for t in ticks if not t.flags & 2]
+    assert backfilled and all(dt_to_ms(t.source_ts) % 1000 == 0 and t.recv_ts is None for t in backfilled)
+    assert any(dt_to_ms(t.source_ts) % 1000 for t in live)
+    # a quote is stored once: a second holds live ticks or recovered ticks, never both, and a
+    # recovered second holds exactly the quotes of the tape
+    recovered_seconds, live_seconds = per_second(backfilled), per_second(live)
+    assert not set(recovered_seconds) & set(live_seconds)
+    assert set(recovered_seconds) == {dt_to_ms(o.ts) for o in recovered}
+    for second, count in recovered_seconds.items():
+        assert count == len(tape_in_second(fake, second))
+
+
+async def test_restart_hole_is_recovered_from_history_stamped_in_whole_seconds(
+    engine: AsyncEngine, registry: InstrumentRegistry, migrated_database: str, server: FakeMassiveServer
+) -> None:
+    clock = OffsetClock(T0)
+    fake = server.fake
+    fake.history_resolution_ms = 1000
+    market = Market(fake, clock)
+    market.start()
+    settings = massive_settings(server, migrated_database)
+    try:
+        first = IngestionService(settings, registry, engine, clock=clock)
+        await first.start()
+        await wait_for(lambda: streaming(first), what="streaming")
+        await asyncio.sleep(3.2)
+        await first.stop()
+        await asyncio.sleep(4.2)
+        second = IngestionService(settings, registry, engine, clock=clock)
+        await second.start()
+        try:
+
+            async def hole_filled() -> bool:
+                async with engine.connect() as conn:
+                    return bool(await repo.list_gaps(conn, status="filled"))
+
+            await wait_for(hole_filled, timeout=15, what="hole backfill")
+            await asyncio.sleep(2.0)
+        finally:
+            await second.stop()
+    finally:
+        await market.stop()
+
+    async with engine.connect() as conn:
+        (gap,) = await repo.list_gaps(conn)
+    assert (gap["kind"], gap["status"]) == ("hole", "filled")
+
+    obs = await fetch_all(engine, "SELECT ts, source, status, n_quotes FROM obs_1s ORDER BY ts")
+    seconds = [dt_to_ms(o.ts) for o in obs]
+    assert seconds == list(range(seconds[0], seconds[0] + len(seconds) * 1000, 1000))
+    in_hole = [o for o in obs if gap["start_ms"] <= dt_to_ms(o.ts) < gap["end_ms"]]
+    assert len(in_hole) == gap["seconds"] and {o.status for o in in_hole} == {"fresh"}
+    assert {o.source for o in in_hole[:-1]} == {"backfill"} and in_hole[-1].source == "live"
+    for o in in_hole[:-1]:  # every recovered row counts all of the provider's quotes of its second
+        assert o.n_quotes == len(tape_in_second(fake, dt_to_ms(o.ts)))
+
+    ticks = await fetch_all(engine, "SELECT source_ts, flags FROM quote_ticks ORDER BY source_ts")
+    backfilled = [t for t in ticks if t.flags & 2]
+    live = [t for t in ticks if not t.flags & 2]
+    assert backfilled and all(dt_to_ms(t.source_ts) % 1000 == 0 for t in backfilled)
+    recovered_seconds, live_seconds = per_second(backfilled), per_second(live)
+    # Never both kinds in one second, so no quote is stored twice.  The price of whole-second
+    # stamps: in the second that was being captured when the process stopped, the quotes after
+    # the stop cannot be told apart from the ones already on disk, so its ticks stay as captured
+    # (its row is still rebuilt from all of the provider's quotes).
+    assert not set(recovered_seconds) & set(live_seconds)
+    for second, count in recovered_seconds.items():
+        assert count == len(tape_in_second(fake, second))
+    cut = floor_ms(gap["start_ms"], SECOND_MS)
+    if cut in live_seconds:
+        assert live_seconds[cut] <= len(tape_in_second(fake, cut))
+    # everything else that was published is on disk exactly once (the first and the last second
+    # of the run and the closing second of the gap are partial by nature)
+    stored = recovered_seconds | live_seconds
+    closing = gap["end_ms"] - 1000
+    for second in range(min(stored) + 1000, max(stored), 1000):
+        if second not in (cut, closing):
+            assert stored.get(second, 0) == len(tape_in_second(fake, second)), second
+
+
+async def test_stream_stamped_in_whole_seconds_is_accepted_in_full(
+    engine: AsyncEngine, registry: InstrumentRegistry, migrated_database: str, server: FakeMassiveServer
+) -> None:
+    """Quotes sharing a timestamp are neither late nor duplicates, and the gate stays open."""
+    clock = OffsetClock(T0)
+    fake = server.fake
+    fake.stream_resolution_ms = fake.history_resolution_ms = 1000
+    market = Market(fake, clock)
+    service = IngestionService(massive_settings(server, migrated_database), registry, engine, clock=clock)
+    await service.start()
+    market.start()
+    try:
+        await wait_for(lambda: streaming(service), what="streaming")
+        await asyncio.sleep(6.0)  # enough samples for the tracker to recognise the granularity
+        before = service.status()["instruments"][0]
+        fake.silent = True
+        await fake.drop_connections()
+        await asyncio.sleep(3.5)
+        fake.silent = False
+
+        async def gap_filled() -> bool:
+            async with engine.connect() as conn:
+                return bool(await repo.list_gaps(conn, status="filled"))
+
+        await wait_for(gap_filled, timeout=15, what="gap backfill")
+        await asyncio.sleep(1.5)
+        after = service.status()["instruments"][0]
+    finally:
+        await market.stop()
+        await service.stop()
+
+    assert before["counters"]["received"] == before["counters"]["accepted"] > 50
+    assert after["counters"]["received"] == after["counters"]["accepted"]
+    assert before["signal_gate"] == {"allowed": True, "reason": "OK"}
+    latency = before["latency"]
+    assert latency["resolution_ms"] == 1000 and "1 s resolution" in latency["note"]
+    assert latency["clock_skew_suspected"] is False and 0 <= latency["p50_ms"] <= 1000
+
+    obs = await fetch_all(engine, "SELECT ts, status, source, n_quotes FROM obs_1s ORDER BY ts")
+    seconds = [dt_to_ms(o.ts) for o in obs]
+    assert seconds == list(range(seconds[0], seconds[0] + len(seconds) * 1000, 1000))
+    assert not [o for o in obs if o.status in ("stale", "missing")]
+    assert [o for o in obs if o.source == "backfill"]
+
+    ticks = await fetch_all(engine, "SELECT source_ts, flags FROM quote_ticks ORDER BY source_ts")
+    assert all(dt_to_ms(t.source_ts) % 1000 == 0 for t in ticks)
+    recovered_seconds = per_second([t for t in ticks if t.flags & 2])
+    live_seconds = per_second([t for t in ticks if not t.flags & 2])
+    assert recovered_seconds and not set(recovered_seconds) & set(live_seconds)
+    stored = recovered_seconds | live_seconds
+    edges = {s for s in live_seconds if s - 1000 in recovered_seconds or s + 1000 in recovered_seconds}
+    for second in range(min(stored) + 1000, max(stored), 1000):
+        if second not in edges:  # the seconds in which the feed dropped and came back are partial
+            assert stored.get(second, 0) == len(tape_in_second(fake, second)), second
+
+
+async def test_live_capture_reconciles_with_the_provider_history(
+    engine: AsyncEngine, registry: InstrumentRegistry, migrated_database: str, server: FakeMassiveServer
+) -> None:
+    """`fxlab reconcile`: seconds captured live hold exactly the quotes of /v3/quotes, and a loss is named."""
+    clock = OffsetClock(T0)
+    fake = server.fake
+    fake.history_resolution_ms = 1000
+    settings = massive_settings(server, migrated_database)
+    service = IngestionService(settings, registry, engine, clock=clock)
+    levels = [(1.16000, 1.16008), (1.16001, 1.16009), (1.16002, 1.16010)]
+
+    async def market() -> None:  # neighbours always differ in price: nothing can pass for a duplicate
+        for n in range(10_000):
+            bid, ask = levels[n % 3]
+            await fake.publish(b=bid, a=ask, t=clock.now_ms())
+            await asyncio.sleep(0.07)
+
+    await service.start()
+    quoting = asyncio.create_task(market())
+    try:
+        await wait_for(lambda: streaming(service), what="streaming")
+        await asyncio.sleep(4.3)
+    finally:
+        quoting.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await quoting
+        await service.stop()
+
+    stamps = [dt_to_ms(t.source_ts) for t in await fetch_all(engine, "SELECT source_ts FROM quote_ticks")]
+    start, end = floor_ms(min(stamps), SECOND_MS) + 1000, floor_ms(max(stamps), SECOND_MS)  # whole seconds only
+    assert end - start >= 2000
+
+    async def check(**window: int) -> dict[str, Any]:
+        return await reconcile(settings, registry, engine, symbol="EURUSD", now_ms=clock.now_ms(), **window)
+
+    report = await check(start_ms=start, end_ms=end)
+    captured = report["seconds_captured_live"]
+    assert captured == (end - start) // 1000 == report["seconds_identical"] == report["seconds_with_same_last_quote"]
+    assert report["live_quotes"] == report["history_quotes_in_those_seconds"] == report["quotes_in_both"] > 20
+    assert report["history_stamps_on_whole_seconds"] == 1.0 and report["live_stamps_on_whole_seconds"] < 0.5
+    assert report["examples_of_differences"] == [] and report["recovered_ticks_in_window"] == 0
+    text = format_reconciliation(report)
+    assert "no differences" in text and "NOT Massive's production endpoints" in text and fake.api_key not in text
+
+    # the provider's history loses a quote: the check names the second
+    fake.tape.remove(next(q for q in fake.tape if start + 1000 <= q["t"] < start + 2000))
+    report = await check(start_ms=start, end_ms=end)
+    assert report["seconds_identical"] == captured - 1
+    assert report["live_quotes"] == report["history_quotes_in_those_seconds"] + 1
+    assert [e["second"] for e in report["examples_of_differences"]] == [iso(start + 1000)]
+
+    # by default only complete, settled minutes are compared: a run of a few seconds has none
+    assert (await check(minutes=1))["error"] == "no live ticks in this window"
+    assert (
+        "unknown instrument"
+        in (await reconcile(settings, registry, engine, symbol="XXXYYY", now_ms=clock.now_ms()))["error"]
+    )
+    mock = Settings(_env_file=None, data_provider="mock", database_url=migrated_database)  # type: ignore[call-arg]
+    assert (
+        "needs the Massive provider"
+        in (await reconcile(mock, registry, engine, symbol="EURUSD", now_ms=clock.now_ms()))["error"]
+    )
 
 
 async def test_slow_first_connection_is_recorded_and_backfilled_and_stale_jobs_are_closed(

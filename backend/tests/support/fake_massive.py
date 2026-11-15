@@ -71,6 +71,10 @@ class FakeMassive:
         self.rest_fail_next: list[int] = []
         self.quotes_page_size: int | None = None
         self.aggs_page_size: int | None = None
+        # Granularity of the timestamps the provider hands out (the tape keeps the true time).
+        # Massive's /v3/quotes returned whole seconds for EUR/USD on 15 November 2026.
+        self.history_resolution_ms = 1
+        self.stream_resolution_ms = 1
         # observations
         self.connection_count = 0
         self.auth_attempts = 0
@@ -170,7 +174,7 @@ class FakeMassive:
                 "x": quote["x"],
                 "a": quote["a"],
                 "b": quote["b"],
-                "t": quote["t"],
+                "t": quote["t"] - quote["t"] % self.stream_resolution_ms,
             }
             for client in self.clients:
                 if self._channel(quote["pair"]) in client.channels or "C.*" in client.channels:
@@ -286,6 +290,11 @@ class FakeMassive:
             return self._page(request, [], self.quotes_page_size, {})
         pair = self._pair_from_ticker(request.path_params["ticker"])
         qp = request.query_params
+        res = self.history_resolution_ms
+
+        def stamp(q: dict[str, Any]) -> int:
+            return (q["t"] - q["t"] % res) * 1_000_000  # nanoseconds, at the provider's granularity
+
         rows = [q for q in self.tape if q["pair"] == pair]
         for name, keep in (
             ("timestamp.gte", lambda t, v: t >= v),
@@ -295,15 +304,16 @@ class FakeMassive:
         ):
             if name in qp:
                 bound = int(qp[name])
-                rows = [q for q in rows if keep(q["t"] * 1_000_000, bound)]
-        rows = sorted(rows, key=lambda q: q["t"], reverse=qp.get("order", "desc") == "desc")
+                rows = [q for q in rows if keep(stamp(q), bound)]
+        # stable: quotes that share a timestamp stay in the order they were published, in both directions
+        rows = sorted(rows, key=stamp, reverse=qp.get("order", "desc") == "desc")
         results = [
             {
                 "ask_exchange": q["x"],
                 "ask_price": q["a"],
                 "bid_exchange": q["x"],
                 "bid_price": q["b"],
-                "participant_timestamp": q["t"] * 1_000_000,
+                "participant_timestamp": stamp(q),
             }
             for q in rows
         ]
@@ -448,8 +458,12 @@ async def _main() -> None:
     parser.add_argument("--api-key", default="test-key")
     parser.add_argument("--rate", type=float, default=5.0, help="quotes per second per pair")
     parser.add_argument("--drop-every", type=float, default=None, help="drop client connections every N seconds")
+    parser.add_argument("--history-resolution-ms", type=int, default=1, help="1000: /v3/quotes stamps whole seconds")
+    parser.add_argument("--stream-resolution-ms", type=int, default=1, help="1000: the stream stamps whole seconds")
     args = parser.parse_args()
     server = await FakeMassiveServer(FakeMassive(args.api_key), args.port).start()
+    server.fake.history_resolution_ms = args.history_resolution_ms
+    server.fake.stream_resolution_ms = args.stream_resolution_ms
     print(f"fake-massive listening: WS {server.ws_url}  REST {server.rest_url}  key={args.api_key}", flush=True)
     await run_market(server.fake, args.rate, {"EUR/USD": 1.1000, "GBP/USD": 1.3000, "USD/JPY": 150.0}, args.drop_every)
 

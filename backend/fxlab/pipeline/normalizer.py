@@ -5,7 +5,8 @@ sees it.  The outcome is always explicit and always counted - nothing is dropped
 silently:
 
 ``ACCEPT``     a valid quote that becomes the new quote in force
-``DUPLICATE``  identical to the previous accepted quote (same timestamp, prices, venue)
+``DUPLICATE``  identical to the previous accepted quote (same sub-second timestamp, prices,
+               venue): the same message delivered twice
 ``LATE``       valid, but its source timestamp is older than the quote in force; it is
                stored as a tick but does not replace newer market state
 ``REJECT``     invalid (reason given): bad price, crossed, spread too wide, bad
@@ -28,6 +29,7 @@ from enum import StrEnum
 
 from fxlab.domain.instruments import InstrumentRegistry
 from fxlab.domain.models import QuoteTick, RawQuote
+from fxlab.timeutil import SECOND_MS
 
 #: quotes stamped before this are certainly garbage (provider history starts in 2009)
 MIN_VALID_TS_MS = 1_230_768_000_000  # 2009-01-01T00:00:00Z
@@ -145,8 +147,12 @@ class QuoteNormalizer:
 
         last = st.last
         if last is not None:
+            # A repeat is only provably the same message when its timestamp is fine enough to
+            # tell two quotes apart.  Massive stamps historical quotes in whole seconds: there,
+            # equal consecutive quotes are separate quotes, and the provider counts them too.
             if (
                 ts == last.source_ts_ms
+                and ts % SECOND_MS != 0
                 and tick.bid == last.bid
                 and tick.ask == last.ask
                 and tick.exchange == last.exchange

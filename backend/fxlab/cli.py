@@ -8,6 +8,7 @@
     fxlab instruments                show the instrument registry
     fxlab history --symbol EURUSD --timeframe 1m --start 2026-11-01 --end 2026-11-08
     fxlab gaps list | scan | fill --id N
+    fxlab reconcile --minutes 10     compare live ticks with the provider's quote history
 """
 
 from __future__ import annotations
@@ -153,6 +154,39 @@ def cmd_history(settings: Settings, args: argparse.Namespace) -> int:
     return 0 if job["status"] == "done" else 1
 
 
+def cmd_reconcile(settings: Settings, args: argparse.Namespace) -> int:
+    from fxlab.clock import SystemClock
+    from fxlab.services.reconcile import format_reconciliation, reconcile
+    from fxlab.storage.db import make_engine
+
+    registry = _registry(settings)
+    active = registry.active()
+    symbol = (args.symbol or (active[0].symbol if active else "")).upper()
+
+    async def run() -> dict[str, Any]:
+        engine = make_engine(settings.database_url)
+        try:
+            return await reconcile(
+                settings,
+                registry,
+                engine,
+                symbol=symbol,
+                now_ms=SystemClock().now_ms(),
+                minutes=min(max(args.minutes, 1), 240),
+                end_ms=parse_time(args.end) if args.end else None,
+            )
+        finally:
+            await engine.dispose()
+
+    try:
+        report = asyncio.run(run())
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(report, indent=2) if args.json else format_reconciliation(report))
+    return 1 if report.get("error") else 0
+
+
 def cmd_gaps(settings: Settings, args: argparse.Namespace) -> int:
     import httpx
 
@@ -215,6 +249,13 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--start", required=True, help="ISO-8601 or epoch")
     history.add_argument("--end", required=True, help="ISO-8601 or epoch")
     history.set_defaults(func=cmd_history)
+
+    rec = sub.add_parser("reconcile", help="compare live ticks with the provider's quote history (read-only)")
+    rec.add_argument("--symbol", help="default: the first active instrument")
+    rec.add_argument("--minutes", type=int, default=10, help="length of the window (1 to 240)")
+    rec.add_argument("--end", help="end of the window, ISO-8601 or epoch (default: the last settled minute)")
+    rec.add_argument("--json", action="store_true", help="print the raw report as JSON")
+    rec.set_defaults(func=cmd_reconcile)
 
     gaps = sub.add_parser("gaps", help="inspect and repair data gaps")
     gaps.add_argument("action", choices=["list", "scan", "fill"])

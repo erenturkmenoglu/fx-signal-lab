@@ -118,6 +118,7 @@ development environment (`fxlab ...`):
 | `instruments` | show the instrument registry |
 | `history --symbol EURUSD --timeframe 1m --start 2026-11-01 --end 2026-11-08` | download provider bars |
 | `gaps list`, `gaps scan`, `gaps fill --id N` | inspect and repair data gaps |
+| `reconcile --minutes 10` | compare live ticks with the provider's quote history (read-only) |
 
 `make help` lists shortcuts for the usual Docker operations, including `make backup`.
 

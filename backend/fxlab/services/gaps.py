@@ -274,6 +274,8 @@ class GapService:
             "provider_quotes": 0,
             "accepted": 0,
             "rejected": 0,
+            "duplicate": 0,
+            "late": 0,
             "ticks_written": 0,
             "observations_written": 0,
             "fresh_seconds": 0,
@@ -310,6 +312,8 @@ class GapService:
                     ticks.append(result.tick)
                 elif result.verdict is Verdict.REJECT:
                     totals["rejected"] += 1
+                else:  # counted, so that the four figures always add up to provider_quotes
+                    totals[result.verdict.value] += 1
             await write(ticks, observations)
 
         if totals["provider_quotes"] > 0:

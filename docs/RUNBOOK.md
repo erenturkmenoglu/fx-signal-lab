@@ -15,6 +15,7 @@ docker compose restart app        # restart the application (the downtime is rec
 docker compose down               # stop everything; data is kept in the pgdata volume
 docker compose up -d --build      # start, rebuilding after a code or dependency change
 make backup                       # dump the database to backups/
+make reconcile                    # compare live ticks with Massive's quote history (read-only)
 ```
 
 Health endpoints: `GET /api/health/live` (process is up), `GET /api/health/ready`
@@ -35,6 +36,11 @@ dashboard shows).
    `config/instruments.yaml` are too tight for the real feed; adjust and restart.
 6. Make sure the host clock is synchronised (NTP). Latency and data-age figures depend
    on it.
+7. After about fifteen minutes of live data, `make reconcile`. It compares the last ten
+   settled minutes of live ticks with `/v3/quotes`, second by second, and prints what is
+   equal and what differs. Outage recovery rests on the two being the same quotes. It
+   only reads, so unlike `make verify` it does not interrupt the feed. A longer window:
+   `make reconcile ARGS="--minutes 60"`.
 
 ## What the dashboard is telling you
 

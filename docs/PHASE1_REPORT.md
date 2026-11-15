@@ -20,7 +20,8 @@ Three things have never been executed:
 Everything else was executed, including the database layer on TimescaleDB 2.26.1, the
 version of the pinned image.
 
-Items 2 and 3 have changed since this report was written; see the addendum at the end.
+All three have changed since this report was written, the first one in part; see the
+addendum at the end.
 
 One command turns the first item from "unverified" into a report:
 `make verify` (it runs `fxlab verify-provider` with your key). It needs a Massive
@@ -368,9 +369,28 @@ What changed after this report was written:
   and the market-data database stays empty; a restart logs no error.
 * **So items 2 and 3 of section 1 are no longer "never executed"**, and risk 2 of
   section 8 is reduced to "not yet run on the target server".
-* **Item 1 is unchanged.** Nothing has run against Massive. A Currencies Starter key
-  now exists, but the build environment has no network route to Massive, so the key
-  can only be used on the server.
+* **Item 1: first run against Massive, with the market closed.** `make verify` ran on
+  the server on 15 November. All six REST checks passed (key, market status, the eight
+  pairs, minute and second bars, historical quotes, last quote), and the WebSocket
+  endpoint greeted, accepted the key and confirmed the subscription. No live quote has
+  been received yet: the quote message and the live latency stay unverified until the
+  market opens. Details: [MASSIVE_API_NOTES.md](MASSIVE_API_NOTES.md), section 4.
+* **What that run changed.** Massive stamps historical quotes in whole seconds. Tests
+  written for that case showed that the duplicate rule then dropped equal quotes
+  sharing a second during recovery (7 of 51 in the test), so a recovered second counted
+  fewer quotes than the provider's own bars. A repeat is now a duplicate only if its
+  timestamp is finer than a second. Three integration tests and one unit test cover
+  whole-second stamps in the history and in the stream.
+  `verify-provider` also printed the 30-minute window for the second-bar and quote
+  checks, which ask for two minutes and one minute; each check now prints its own.
+* **New: `fxlab reconcile` (`make reconcile`).** Outage recovery assumes that
+  `/v3/quotes` holds the quotes the stream delivered. That has never been checked on
+  real data. The command compares a window of live ticks with the history second by
+  second, read-only and without touching the feed, so the assumption can be tested as
+  soon as live ticks exist. Against the stand-in it reports full agreement and names
+  the second when a quote is removed from the history.
+* **Tests now:** 204 on TimescaleDB 2.26.1, 202 and 2 skipped on plain PostgreSQL, 167
+  and 37 skipped without a database.
 * **Decisions:** trading below one minute is intended, so all sub-minute bars stay;
   the dashboard is wanted on a phone, which [DEPLOY.md](DEPLOY.md) covers with a
   private network instead of a public address.

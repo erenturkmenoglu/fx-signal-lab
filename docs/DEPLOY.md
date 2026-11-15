@@ -3,10 +3,11 @@
 Checked on 15 November 2026. Prices and console labels change; the links at the end are
 the places to re-check them.
 
-Nothing in this document has been executed by the author: the build environment had no
-Docker and no cloud account. The setup script was tested against stand-ins for Docker
-and the application (key handling, re-runs, failure paths). Treat the first real run as
-a test and report what differs.
+The author's build environment has no Docker and no cloud account, so the steps were
+written without running them; the setup script was tested against stand-ins for Docker
+and the application (key handling, swap file, re-runs, failure paths). Steps 1 to 4
+have since been run on a Lightsail server (15 November 2026), and step 4 printed what
+is described there. Report what differs for you.
 
 ## What to run it on
 
@@ -33,9 +34,10 @@ with a US east coast region does the same job.
 ### Server size: what was measured
 
 Measured on 15 November 2026 with quotes from the local test provider and from the
-simulator, not from Massive. How many quotes a second Massive sends for EUR/USD is not
-known yet, so three rates were used. The disk figures come from synthetic quotes shaped
-like EUR/USD; real quotes may compress better or worse.
+simulator, not from Massive, at three rates. Massive's history shows 1.4 to 1.8 quotes
+a second for EUR/USD in the last half hour before a weekly close; busy hours are not
+known yet. The disk figures come from synthetic quotes shaped like EUR/USD; real quotes
+may compress better or worse.
 
 | | Measured |
 |---|---|
@@ -151,8 +153,18 @@ runs seven checks with your key and prints a report. Keep the report.
 
 On a weekend the six REST checks should say `OK` and the WebSocket check `NODATA`, with
 the note that it authenticated and subscribed and that the FX market is closed. Quotes
-start on Sunday at 17:00 New York time (22:00 UTC in winter, 21:00 UTC in summer). Run
-it again then: every check should say `OK`.
+start on Sunday at 17:00 New York time (22:00 UTC in winter, 21:00 UTC in summer).
+
+Once quotes have been flowing for about fifteen minutes:
+
+```bash
+sudo make reconcile
+```
+
+It compares the last ten settled minutes of live ticks with Massive's quote history and
+prints what is equal and what differs. It only reads, so the feed is not interrupted.
+(`make verify` can be repeated too, but it stops the application for about half a
+minute; the gap is recovered afterwards.)
 
 ## 5. The dashboard on your phone
 

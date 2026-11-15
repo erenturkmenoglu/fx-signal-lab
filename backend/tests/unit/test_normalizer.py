@@ -86,16 +86,27 @@ def test_future_timestamps(norm: QuoteNormalizer) -> None:
 
 
 def test_exact_duplicate_is_flagged_and_does_not_replace_state(norm: QuoteNormalizer) -> None:
-    first = norm.process(make_raw(T0, 1.16000, 1.16008))
-    dup = norm.process(make_raw(T0, 1.16000, 1.16008, recv_ts_ms=T0 + 3))
+    ts = T0 + 137
+    first = norm.process(make_raw(ts, 1.16000, 1.16008))
+    dup = norm.process(make_raw(ts, 1.16000, 1.16008, recv_ts_ms=ts + 3))
     assert dup.verdict is Verdict.DUPLICATE
     assert norm.last("EURUSD") is first.tick
-    # same timestamp but a different price is a real update (provider stamps can be 1 s coarse)
-    assert norm.process(make_raw(T0, 1.16001, 1.16009)).verdict is Verdict.ACCEPT
+    # same timestamp but a different price is a real update
+    assert norm.process(make_raw(ts, 1.16001, 1.16009)).verdict is Verdict.ACCEPT
     # ... and going back to the earlier price is again a real update, not a duplicate
-    assert norm.process(make_raw(T0, 1.16000, 1.16008)).verdict is Verdict.ACCEPT
+    assert norm.process(make_raw(ts, 1.16000, 1.16008)).verdict is Verdict.ACCEPT
     # a different venue id is not a duplicate either
-    assert norm.process(make_raw(T0, 1.16000, 1.16008, exchange=7)).verdict is Verdict.ACCEPT
+    assert norm.process(make_raw(ts, 1.16000, 1.16008, exchange=7)).verdict is Verdict.ACCEPT
+
+
+def test_equal_quotes_with_a_whole_second_timestamp_are_separate_quotes(norm: QuoteNormalizer) -> None:
+    """Massive's historical quotes are stamped in whole seconds: a repeat is not a duplicate there."""
+    assert T0 % 1000 == 0
+    results = [norm.process(make_raw(T0, 1.16000, 1.16008, recv_ts_ms=T0 + i)) for i in range(3)]
+    assert [r.verdict for r in results] == [Verdict.ACCEPT] * 3
+    assert norm.counters("EURUSD") == {"received": 3, "accepted": 3}
+    # one second later, still equal: a quote again
+    assert norm.process(make_raw(T0 + 1000, 1.16000, 1.16008)).verdict is Verdict.ACCEPT
 
 
 def test_out_of_order_quote_is_late_and_keeps_newer_state(norm: QuoteNormalizer) -> None:
@@ -158,8 +169,8 @@ def test_state_is_independent_per_symbol(norm: QuoteNormalizer) -> None:
 
 def test_every_quote_is_counted_exactly_once(norm: QuoteNormalizer) -> None:
     inputs = [
-        make_raw(T0, 1.16000, 1.16008),
-        make_raw(T0, 1.16000, 1.16008),  # duplicate
+        make_raw(T0 + 5, 1.16000, 1.16008),
+        make_raw(T0 + 5, 1.16000, 1.16008),  # duplicate
         make_raw(T0 - 500, 1.16000, 1.16009),  # late
         make_raw(T0 + 10, 1.16010, 1.16000),  # crossed
         make_raw(T0 + 20, None, 1.16000),  # invalid

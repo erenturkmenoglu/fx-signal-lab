@@ -149,6 +149,9 @@ def test_migrate_history_and_gaps_commands(
 
     assert main(["gaps", "list"]) == 0
     assert capsys.readouterr().out.startswith("   ID SYMBOL")
+    # nothing has been captured live in this database: the comparison says so and fails
+    assert main(["reconcile", "--minutes", "5"]) == 1
+    assert "no live ticks stored for EURUSD yet" in capsys.readouterr().out
     # scan/fill talk to the running application; without one the command says so instead of hanging
     assert main(["gaps", "scan", "--api", "http://127.0.0.1:9"]) == 1
     assert "could not reach the running application" in capsys.readouterr().err
