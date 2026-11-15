@@ -91,6 +91,10 @@ Three things on that page are there because a board invites a particular mistake
 The commands behind the page are `fxlab board --request -` and `fxlab signals --request -`
 (JSON on standard input, JSON out), so the page and a terminal cannot disagree.
 
+A result stays on its page while another page is looked at: the strategy lab keeps its last
+report and the board its tables and chart until the browser tab is closed or reloaded. The
+last board is also kept by the server, so it is there again after a reload.
+
 ## What is tested on what
 
 | | |

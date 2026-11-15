@@ -255,14 +255,14 @@ function Days({
               <th title="Among all methods on the board (random entries aside): the one that made the most that day. Known only afterwards.">
                 Best that day
               </th>
-              <th className="r" title="How many of the methods made money that day, and how many lost">
-                Methods up / down
-              </th>
               {combos.map((combo) => (
                 <th key={combo.id} className="r" title={combo.title}>
                   <span className="text-ink">{methodLabel(combo)}</span>
                 </th>
               ))}
+              <th className="r" title="How many of the methods made money that day, and how many lost">
+                Methods up / down
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -339,9 +339,6 @@ function DayLine({
             <span className="text-ink-3">none made money</span>
           )}
         </td>
-        <td className="r num">
-          {row.up} / {row.down}
-        </td>
         {row.cells.map((cell, k) => (
           // the columns keep their order: the position is the method
           <td key={k} className="r num">
@@ -362,6 +359,9 @@ function DayLine({
             )}
           </td>
         ))}
+        <td className="r num">
+          {row.up} / {row.down}
+        </td>
       </tr>
     </>
   );

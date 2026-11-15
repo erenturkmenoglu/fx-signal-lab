@@ -31,6 +31,11 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
     setView(next);
     window.scrollTo({ top: 0 });
   };
+  // the lab and the board are kept once they have been opened: a result is still there after a look at another page
+  const [opened, setOpened] = useState({ lab: false, board: false });
+  useEffect(() => {
+    if (view !== "live") setOpened((before) => (before[view] ? before : { ...before, [view]: true }));
+  }, [view]);
   const [selected, setSelected] = useState<string | null>(null);
   const [source, setSource] = useState<ChartSource>("live");
   const [providerRange, setProviderRange] = useState<{ timeframe: string; start: number; end: number } | null>(null);
@@ -65,11 +70,21 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
           <br />
           Fix the cause, then restart the application. Nothing is being collected in the meantime.
         </Notice>
-      ) : view === "lab" ? (
-        <Lab symbol={inst?.symbol ?? null} />
-      ) : view === "board" ? (
-        <Board symbol={inst?.symbol ?? null} />
       ) : (
+        <>
+          {opened.lab || view === "lab" ? (
+            <div hidden={view !== "lab"}>
+              <Lab symbol={inst?.symbol ?? null} />
+            </div>
+          ) : null}
+          {opened.board || view === "board" ? (
+            <div hidden={view !== "board"}>
+              <Board symbol={inst?.symbol ?? null} />
+            </div>
+          ) : null}
+        </>
+      )}
+      {status && !status.startup_error && view === "live" ? (
         <main className="mx-auto flex max-w-[1680px] flex-col gap-2 p-2">
           {status.provider.label === "NOT CONFIGURED" ? (
             <Notice title="No market data provider is configured" tone="bad" inline>
@@ -132,7 +147,7 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
             times are UTC.
           </footer>
         </main>
-      )}
+      ) : null}
     </div>
   );
 }
