@@ -1,4 +1,5 @@
 import { notifyUnauthorized } from "./auth";
+import type { BacktestBody, LabInfo, Report } from "./lab/model";
 import type { Bar, ConnEvent, Gap, Job, Obs, SystemStatus } from "./types";
 
 export class ApiError extends Error {
@@ -45,10 +46,18 @@ export const api = {
   scanGaps: () => request<{ queued: number }>("/api/gaps/scan", { method: "POST" }),
   fillGap: (id: number) => request<{ queued: boolean }>(`/api/gaps/${id}/fill`, { method: "POST" }),
   jobs: () => request<Job[]>("/api/history/jobs?limit=8"),
+  job: (id: number) => request<Job>(`/api/history/jobs/${id}`),
   createJob: (symbol: string, timeframe: string, start: number, end: number) =>
     request<Job>("/api/history/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol, timeframe, start, end }),
+    }),
+  lab: (symbol?: string) => request<LabInfo>(`/api/lab${symbol ? `?${query({ symbol })}` : ""}`),
+  backtest: (body: BacktestBody) =>
+    request<Report>("/api/backtests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     }),
 };

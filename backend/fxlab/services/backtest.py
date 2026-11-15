@@ -12,9 +12,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from fxlab.domain.instruments import InstrumentRegistry
-from fxlab.domain.timeframes import get_timeframe
+from fxlab.domain.timeframes import TIMEFRAMES, get_timeframe
 from fxlab.research.bars import PROVIDER_SOURCE, load_provider_bars
-from fxlab.research.report import BacktestError, BacktestRequest, build_report, default_execution
+from fxlab.research.report import BacktestError, BacktestRequest, build_report, default_execution, prepare
 from fxlab.research.strategies import STRATEGIES
 from fxlab.storage import schema as s
 from fxlab.timeutil import DAY_MS, dt_to_ms, iso, ms_to_dt
@@ -68,26 +68,32 @@ async def describe_lab(engine: AsyncEngine, registry: InstrumentRegistry, symbol
         "currency": inst.quote,
         "unit_currency": inst.base,
         "strategies": [st.describe() for st in STRATEGIES.values()],
+        # bars a strategy can read: aligned to the UTC clock, a minute or longer
+        "timeframes": [tf.code for tf in TIMEFRAMES.values() if tf.anchor == "utc" and tf.seconds >= 60],
+        "pip_size": inst.pip_size,
+        "price_precision": inst.price_precision,
+        "session_tz": inst.session.tz,
         "execution": {name: getattr(ex, name) for name in ex.__dataclass_fields__},
         "history": await history_inventory(engine, symbol),
     }
 
 
-async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, request: BacktestRequest) -> dict[str, Any]:
-    """Load the bars of the request and run it.  Raises ``BacktestError`` with a message fit for the user."""
+def check_request(registry: InstrumentRegistry, request: BacktestRequest) -> None:
+    """Everything that can be said about a request without reading data.  Raises ``BacktestError``."""
     if request.symbol not in registry:
         raise BacktestError(f"unknown instrument {request.symbol!r}")
     if request.end_ms <= request.start_ms:
         raise BacktestError("end must be after start")
     if request.end_ms - request.start_ms > MAX_RANGE_MS:
         raise BacktestError(f"one test covers at most {MAX_RANGE_MS // DAY_MS} days")
+    prepare(registry.get(request.symbol), request)
+
+
+async def run_backtest(engine: AsyncEngine, registry: InstrumentRegistry, request: BacktestRequest) -> dict[str, Any]:
+    """Load the bars of the request and run it.  Raises ``BacktestError`` with a message fit for the user."""
+    check_request(registry, request)
     inst = registry.get(request.symbol)
-    try:
-        base_tf = get_timeframe(request.base_timeframe)
-    except ValueError as exc:
-        raise BacktestError(str(exc)) from None
-    if base_tf.anchor != "utc":
-        raise BacktestError(f"trades cannot be simulated on {base_tf.code} bars; use bars of one hour or less")
+    base_tf = prepare(inst, request).base_tf  # everything about the request is checked before any data is read
     instrument_id = await _instrument_id(engine, request.symbol)
     bars = None
     if instrument_id is not None:

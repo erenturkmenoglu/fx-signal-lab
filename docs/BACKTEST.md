@@ -28,6 +28,29 @@ sudo make backtest ARGS="--strategy session_breakout -p session=london --timefra
 The download is split into jobs automatically; a year of minute bars is about 370 000 rows.
 Running it again for the same range overwrites the same rows.
 
+## In the browser: the strategy lab
+
+The dashboard has a second page, **Strategy lab** (the address ends in `#lab`). It does what
+the commands above do, from a phone or any browser:
+
+1. **History.** If nothing is stored it offers to download the last twelve months of
+   one-minute bars; afterwards "Update to now" fetches what is new.
+2. **The form.** Strategy and its parameters, the bars it reads, the period, how the period is
+   split, and every trading assumption from the table below. What was last entered is kept in
+   the browser.
+3. **Run backtest.** One run at a time; a year of minute bars takes a few seconds. The run
+   happens in a process of its own (the same `fxlab backtest` command), so the live feed is
+   not disturbed.
+4. **The result.**
+   - the table of totals: whole period, in-sample, out-of-sample, and one clip only;
+   - the running total by trading day, with the one-clip-only line next to it and the result
+     of every day below; clicking a day selects it;
+   - the price chart of the selected day (the stored bid bars) with every entry (arrow), clip
+     added (+n), target (circle), stop (square) and exit by the clock marked on it; clicking a
+     trade in the list draws its average entry, target and stop as lines and zooms to it;
+   - the days, the trades, how trades ended, results by hour of entry, and why signals were
+     not traded.
+
 ## What is tested on what
 
 | | |
@@ -171,11 +194,29 @@ produce exactly the loser. The backtest takes the stop seriously (it is always f
 the stop or worse) so that this shows in the numbers; a ladder without a stop has no largest
 loss to show, which is not the same as not having one.
 
+## How the engine itself is tested
+
+- **By hand.** Thirty-five tests on bars written out by hand, with every fill and
+  the money worked out in comments: both directions, every kind of exit, every rule about
+  what happens inside one bar.
+- **Against a second simulation.** On random markets with gaps and missing minutes the
+  engine (array searches, floating point) must agree, fill for fill and dollar for dollar,
+  with a plain bar-by-bar loop that counts in whole numbers.
+- **Against deliberate defects.** Seventeen wrong versions of the engine (target before
+  stop, buying at the bid, filling inside the signal bar, ...) are each caught by the examples.
+- **On prices that cannot be predicted.** On driftless random walks every strategy must lose
+  the spread and nothing else. Measured over 2 300 to 5 200 trades per strategy: between
+  -0.11 and +0.06 pips per clip without a spread, between -1.18 and -0.85 with a spread of
+  1.0. A look-ahead error anywhere between the bars and the trade list shows up here as
+  profit from noise; two such errors planted on purpose moved the figure by 1.5 to 3.5 pips.
+- **Look-ahead, directly.** Every indicator and every strategy is recomputed on series cut
+  short at many points; nothing before the cut may change.
+
 ## Limits, and what has not been verified
 
-- **No real history has been run through this yet.** The engine is tested on hand-written
-  bars, on random markets against a second, independent bar-by-bar simulation, and against a
-  real database; the first run on Massive's EUR/USD history happens on the server.
+- **No real history has been run through this yet.** Everything above is on hand-written
+  and random prices and against a real database; the first run on Massive's EUR/USD history
+  happens on the server.
 - **Bid basis is taken from Massive's documentation**, not yet checked against their quote
   history. If the bars were mid prices instead, every level would shift by half a spread; the
   cost of a round trip would be the same.

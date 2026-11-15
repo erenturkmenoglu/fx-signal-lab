@@ -8,12 +8,28 @@ import { MarketMonitor } from "./components/MarketMonitor";
 import { type ChartSource, PriceChart } from "./components/PriceChart";
 import { QuoteBoard } from "./components/QuoteBoard";
 import { SecondsTape } from "./components/SecondsTape";
+import { Lab } from "./lab/Lab";
 import { useLive } from "./live";
 import type { Job } from "./types";
+
+export type View = "live" | "lab";
+const viewFromAddress = (): View => (window.location.hash === "#lab" ? "lab" : "live");
 
 export function App({ onSignOut }: { onSignOut?: () => void }) {
   const live = useLive();
   const { status, link } = live;
+  // which page is shown lives in the address (#lab), so a reload or a bookmark comes back to it
+  const [view, setView] = useState<View>(viewFromAddress);
+  useEffect(() => {
+    const follow = () => setView(viewFromAddress());
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, []);
+  const show = (next: View) => {
+    window.history.replaceState(null, "", next === "lab" ? "#lab" : window.location.pathname + window.location.search);
+    setView(next);
+    window.scrollTo({ top: 0 });
+  };
   const [selected, setSelected] = useState<string | null>(null);
   const [source, setSource] = useState<ChartSource>("live");
   const [providerRange, setProviderRange] = useState<{ timeframe: string; start: number; end: number } | null>(null);
@@ -33,7 +49,7 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
 
   return (
     <div className="min-h-screen">
-      <Header status={status?.startup_error ? null : status} link={link} onSignOut={onSignOut} />
+      <Header status={status?.startup_error ? null : status} link={link} onSignOut={onSignOut} view={view} onView={show} />
       {status?.provider?.synthetic ? <MockBanner /> : null}
 
       {!status ? (
@@ -48,6 +64,8 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
           <br />
           Fix the cause, then restart the application. Nothing is being collected in the meantime.
         </Notice>
+      ) : view === "lab" ? (
+        <Lab symbol={inst?.symbol ?? null} />
       ) : (
         <main className="mx-auto flex max-w-[1680px] flex-col gap-2 p-2">
           {status.provider.label === "NOT CONFIGURED" ? (

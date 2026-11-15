@@ -76,8 +76,27 @@ def trade_rows(trades: list[Trade], ex: Execution, days: list[str]) -> list[dict
     return rows
 
 
-def daily_rows(rows: list[dict[str, Any]], all_days: list[str], pip_value: float) -> list[dict[str, Any]]:
-    """One line per trading day in the data, days without a trade included."""
+def day_spans(ts: Ints, tz: str, rollover: str) -> dict[str, tuple[int, int]]:
+    """Each trading day in ``ts`` (ascending) with the times of its first and last instant."""
+    numbers = trading_day_numbers(ts, tz, rollover)
+    if len(numbers) == 0:
+        return {}
+    starts = np.flatnonzero(np.concatenate(([True], numbers[1:] != numbers[:-1])))
+    ends = np.concatenate((starts[1:], [len(numbers)])) - 1
+    return {day_name(numbers[a]): (int(ts[a]), int(ts[b])) for a, b in zip(starts, ends, strict=True)}
+
+
+def daily_rows(
+    rows: list[dict[str, Any]],
+    all_days: list[str],
+    pip_value: float,
+    spans: dict[str, tuple[int, int]] | None = None,
+) -> list[dict[str, Any]]:
+    """One line per trading day in the data, days without a trade included.
+
+    With ``spans`` each line also says when the first and the last bar of that day began,
+    which is what a chart needs to show the day.
+    """
     by_day: dict[str, list[dict[str, Any]]] = {day: [] for day in all_days}
     for row in rows:
         by_day.setdefault(row["day"], []).append(row)
@@ -87,17 +106,18 @@ def daily_rows(rows: list[dict[str, Any]], all_days: list[str], pip_value: float
         items = by_day[day]
         pnl = sum(r["pnl"] for r in items)
         total += pnl
-        out.append(
-            {
-                "day": day,
-                "trades": len(items),
-                "wins": sum(1 for r in items if r["pnl"] > 0),
-                "pnl": round(pnl, 2),
-                "pips": round(pnl / pip_value, 2),
-                "cumulative": round(total, 2),
-                "max_units": max((r["units"] for r in items), default=0.0),
-            }
-        )
+        line = {
+            "day": day,
+            "trades": len(items),
+            "wins": sum(1 for r in items if r["pnl"] > 0),
+            "pnl": round(pnl, 2),
+            "pips": round(pnl / pip_value, 2),
+            "cumulative": round(total, 2),
+            "max_units": max((r["units"] for r in items), default=0.0),
+        }
+        if spans is not None and day in spans:
+            line["first_bar_ms"], line["last_bar_ms"] = spans[day]
+        out.append(line)
     return out
 
 

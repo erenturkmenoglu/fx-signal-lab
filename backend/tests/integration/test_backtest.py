@@ -121,6 +121,8 @@ async def test_what_is_stored_and_what_a_form_can_offer(engine: AsyncEngine, reg
     assert lab["execution"]["flat_time"] == "16:45" and lab["execution"]["max_clips"] == 5
     assert (lab["symbol"], lab["currency"], lab["unit_currency"]) == ("EURUSD", "USD", "EUR")
     assert [h["timeframe"] for h in lab["history"]] == ["1m", "5m"]
+    assert lab["timeframes"] == ["1m", "5m", "15m", "30m", "1h"]
+    assert (lab["pip_size"], lab["price_precision"], lab["session_tz"]) == (0.0001, 5, "America/New_York")
     json.dumps(lab)
     with pytest.raises(BacktestError, match="unknown instrument"):
         await describe_lab(engine, registry, "XAUUSD")

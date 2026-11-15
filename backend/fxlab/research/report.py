@@ -130,16 +130,13 @@ def _split_day(split: str, day_names: list[str], warnings: list[str]) -> str | N
     if split == "auto":
         if len(day_names) < MIN_DAYS_FOR_SPLIT:
             warnings.append(
-                f"Only {len(day_names)} trading days: too few to keep some back for checking, "
-                "so every number here is in-sample."
+                f"Only {len(day_names)} trading day{'' if len(day_names) == 1 else 's'}: too few to keep some back "
+                "for checking, so every number here is in-sample."
             )
             return None
         part, whole = OUT_OF_SAMPLE_SHARE
         return day_names[len(day_names) - max(1, len(day_names) * part // whole)]
-    try:
-        day = date.fromisoformat(split).isoformat()
-    except ValueError:
-        raise BacktestError(f"split must be 'auto', 'none' or a date (YYYY-MM-DD), not {split!r}") from None
+    day = date.fromisoformat(split).isoformat()  # checked when the request was prepared
     if not day_names or day <= day_names[0] or day > day_names[-1]:
         warnings.append(f"The split date {day} lies outside the data: one side of the split is empty.")
     return day
@@ -168,6 +165,21 @@ def _data_section(
     }
 
 
+def _inside_the_trading_week(base: Bars, inst: Instrument) -> Bars:
+    """The bars that fall into the hours the instrument trades (for spot FX: not the weekend).
+
+    A provider may publish the odd quote while the market is closed.  Nothing can be traded on
+    it, so no signal may come from it and no position may be opened or closed on it.
+    """
+    opening = inst.make_calendar().open_intervals(int(base.ts[0]), int(base.ts[-1]) + 1)
+    keep = np.zeros(len(base), dtype=bool)
+    for start, end in opening:
+        keep[int(np.searchsorted(base.ts, start, side="left")) : int(np.searchsorted(base.ts, end, side="left"))] = True
+    if bool(keep.all()):
+        return base
+    return Bars(base.ts[keep], base.open[keep], base.high[keep], base.low[keep], base.close[keep], base.seconds)
+
+
 def _part(rows: list[dict[str, Any]], days: list[dict[str, Any]], pip_value: float) -> dict[str, Any]:
     return {
         "first_day": days[0]["day"] if days else None,
@@ -176,31 +188,64 @@ def _part(rows: list[dict[str, Any]], days: list[dict[str, Any]], pip_value: flo
     }
 
 
-def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict[str, Any]:
-    """Run ``request`` on ``base`` (the provider's bars of the requested range, already loaded)."""
+@dataclass(frozen=True)
+class Plan:
+    """A request with everything in it checked and resolved; nothing has been loaded or run yet."""
+
+    strategy: Strategy
+    base_tf: Timeframe
+    tf: Timeframe
+    params: dict[str, int | float | str]
+    execution: Execution
+
+
+def prepare(inst: Instrument, request: BacktestRequest) -> Plan:
+    """Check a request against the instrument and the strategy.  Cheap: no data is touched."""
     strategy = get_strategy_or_fail(request.strategy)
     try:
         base_tf = get_timeframe(request.base_timeframe)
     except ValueError as exc:
         raise BacktestError(str(exc)) from None
-    if base_tf.seconds != base.seconds:
-        raise BacktestError("the bars given are not of the base timeframe")
+    if base_tf.anchor != "utc":
+        raise BacktestError(f"trades cannot be simulated on {base_tf.code} bars; use bars of one hour or less")
     tf = signal_timeframe(strategy, request.timeframe, base_tf)
     try:
         params = strategy.resolve(request.params)
     except ValueError as exc:
         raise BacktestError(str(exc)) from None
-    ex = resolve_execution(inst, request.execution)
+    if request.split not in ("auto", "none"):
+        try:
+            date.fromisoformat(request.split)
+        except ValueError:
+            raise BacktestError(f"split must be 'auto', 'none' or a date (YYYY-MM-DD), not {request.split!r}") from None
+    return Plan(strategy, base_tf, tf, params, resolve_execution(inst, request.execution))
+
+
+def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict[str, Any]:
+    """Run ``request`` on ``base`` (the provider's bars of the requested range, already loaded)."""
+    plan = prepare(inst, request)
+    strategy, base_tf, tf, params, ex = plan.strategy, plan.base_tf, plan.tf, plan.params, plan.execution
+    if base_tf.seconds != base.seconds:
+        raise BacktestError("the bars given are not of the base timeframe")
     if len(base) == 0:
         raise BacktestError("there are no bars in this range")
 
     warnings: list[str] = []
+    asked = len(base)
+    base = _inside_the_trading_week(base, inst)
+    if len(base) < asked:
+        warnings.append(
+            f"{asked - len(base):,} bars lie outside the instrument's trading week (weekend quotes) and were left out."
+        )
+    if len(base) == 0:
+        raise BacktestError("there are no bars inside the trading week in this range")
     signal_bars = resample(base, tf.seconds)
     signals = strategy.compute(signal_bars, params, ex.pip_size)
     outcome = engine.run(base, signal_bars, signals, ex)
 
     tz, rollover = inst.session.tz, inst.session.daily_rollover
-    day_names = [metrics.day_name(n) for n in np.unique(metrics.trading_day_numbers(base.ts, tz, rollover))]
+    spans = metrics.day_spans(base.ts, tz, rollover)
+    day_names = sorted(spans)
     pip_value = ex.clip_units * ex.pip_size  # quote currency per pip on one clip
 
     def rows_of(trades: list[engine.Trade]) -> list[dict[str, Any]]:
@@ -208,7 +253,7 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
         return metrics.trade_rows(trades, ex, metrics.trading_days(exits, tz, rollover))
 
     rows = rows_of(outcome.trades)
-    daily = metrics.daily_rows(rows, day_names, pip_value)
+    daily = metrics.daily_rows(rows, day_names, pip_value, spans)
     report: dict[str, Any] = {
         "request": {
             "symbol": inst.symbol,
@@ -244,9 +289,10 @@ def build_report(base: Bars, inst: Instrument, request: BacktestRequest) -> dict
     if ex.max_clips > 1:  # the same signals, one clip only: what adding to positions changed
         single = engine.run(base, signal_bars, signals, replace(ex, max_clips=1))
         single_rows = rows_of(single.trades)
+        single_daily = metrics.daily_rows(single_rows, day_names, pip_value)
         report["without_adding"] = {
-            "summary": metrics.summarize(single_rows, metrics.daily_rows(single_rows, day_names, pip_value), pip_value),
-            "equity": metrics.equity_points(single_rows),
+            "summary": metrics.summarize(single_rows, single_daily, pip_value),
+            "daily": single_daily,
         }
 
     summary = report["summary"]

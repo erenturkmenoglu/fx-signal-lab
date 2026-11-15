@@ -14,11 +14,15 @@ export function Header({
   status,
   link,
   onSignOut,
+  view,
+  onView,
 }: {
   status: SystemStatus | null;
   link: Link;
   /** present only when this installation has a login */
   onSignOut?: () => void;
+  view: "live" | "lab";
+  onView: (view: "live" | "lab") => void;
 }) {
   const provider = status?.provider;
   const badge = provider ? PROVIDER[provider.label] : null;
@@ -29,6 +33,15 @@ export function Header({
         <span className="text-[17px] font-semibold tracking-tight">FX Signal Lab</span>
         {status?.version ? <span className="note num">v{status.version}</span> : null}
       </div>
+
+      <nav className="flex items-center gap-1" aria-label="Pages">
+        <button type="button" className="btn" aria-pressed={view === "live"} onClick={() => onView("live")}>
+          Live
+        </button>
+        <button type="button" className="btn" aria-pressed={view === "lab"} onClick={() => onView("lab")}>
+          Strategy lab
+        </button>
+      </nav>
 
       {badge && provider ? (
         <div className="flex items-center gap-2">

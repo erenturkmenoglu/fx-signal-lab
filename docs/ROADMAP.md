@@ -20,9 +20,10 @@ thin slice through Phases 2 to 4, and the rest afterwards.
    future information; when stop and target fall into the same bar, the worse outcome
    counts. Only the indicators these strategies need. Run from the command line
    (`make backtest`).
-3. **Strategy lab screen:** strategy and parameters; the chart with entry, exit, stop
-   and target marks; equity curve, daily profit and loss, trade list. In-sample and
-   out-of-sample results are shown apart.
+3. **Strategy lab screen** (done, same caveat): strategy and parameters; the chart of a
+   day with entry, clip, target and stop marks; running total, daily profit and loss,
+   trade list. In-sample and out-of-sample results are shown apart, and the same signals
+   without adding next to the result with adding. History is downloaded from the page.
 4. **Live signals** from the strategy that survives, running the same code as the
    backtest.
 

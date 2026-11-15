@@ -169,16 +169,18 @@ jobs:
           curl -fsS -o /dev/null http://127.0.0.1:8000/api/status
       - name: A backtest runs in the container on stored history
         run: |
-          # four weeks of one-minute provider bars (a slow wave with a faster one on top).  No result on
-          # them means anything; they are rows of the kind a history download writes.
+          # four weeks of one-minute provider bars (a slow wave with a faster one on top) for the hours the
+          # market is open: Sunday 21:00 to Friday 21:00 UTC in October.  No result on them means anything;
+          # they are rows of the kind a history download writes.
           docker compose exec -T db psql -U fxlab -d fxlab_mock -v ON_ERROR_STOP=1 -qc "
             insert into bars (instrument_id, timeframe, source, ts, open, high, low, close, price_basis)
             select (select id from instruments where symbol = 'EURUSD'), '1m', 'massive_agg', ts,
                    round(p::numeric, 5), round((p + 0.0002)::numeric, 5), round((p - 0.0002)::numeric, 5),
                    round((p + 0.0001)::numeric, 5), 'bid'
-            from (select ts, 1.16 + 0.004 * sin(extract(epoch from ts) / 3000) + 0.0015 * sin(extract(epoch from ts) / 400) as p
-                  from generate_series('2026-10-05 00:00+00'::timestamptz, '2026-10-30 20:59+00', interval '1 minute') ts
-                  where extract(isodow from ts at time zone 'UTC') < 6) wave"
+            from (select ts, extract(isodow from ts at time zone 'UTC') as dow, extract(hour from ts at time zone 'UTC') as hour,
+                         1.16 + 0.004 * sin(extract(epoch from ts) / 3000) + 0.0015 * sin(extract(epoch from ts) / 400) as p
+                  from generate_series('2026-10-05 00:00+00'::timestamptz, '2026-10-30 20:59+00', interval '1 minute') ts) wave
+            where not (dow = 6 or (dow = 5 and hour >= 21) or (dow = 7 and hour < 21))"
           make strategies | grep -q '^rsi_reversion '
           make backtest ARGS="--strategy bollinger_reversion --days 3" | tee backtest.txt
           grep -q '^Bollinger reversion on EURUSD, 5m bars (trades simulated on 1m bid bars)' backtest.txt
@@ -197,6 +199,35 @@ jobs:
             echo "a backtest without history did not fail"; exit 1
           fi
           grep -q 'no 1m history of USDJPY is stored. Download it first: fxlab history' refused.txt
+      - name: The strategy lab answers over HTTP
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/lab | python3 -c "
+          import json, sys
+          lab = json.load(sys.stdin)
+          assert [h['timeframe'] for h in lab['history']] == ['1m'] and lab['history'][0]['bars'] == 28620, lab['history']
+          assert len(lab['strategies']) >= 4 and lab['execution']['spread_pips'] == 1.0, lab['execution']
+          print('ok:', len(lab['strategies']), 'strategies,', lab['history'][0]['bars'], 'bars stored')"
+          curl -fsS -H 'Content-Type: application/json' \
+            -d '{"symbol": "EURUSD", "strategy": "ema_momentum", "start": "2026-10-05", "end": "2026-10-31", "execution": {"min_potential_pips": 0}}' \
+            http://127.0.0.1:8000/api/backtests > lab.json
+          python3 -c "
+          import json
+          r = json.load(open('lab.json'))
+          assert r['request']['strategy'] == 'ema_momentum' and r['data']['base_bars'] == 28620, r['data']
+          assert r['summary']['trades'] > 5 and len(r['daily']) == 20, (r['summary']['trades'], len(r['daily']))
+          assert all('first_bar_ms' in d for d in r['daily'])
+          print('ok:', r['summary']['trades'], 'trades over HTTP')"
+          # the bars the price chart of a day asks for
+          curl -fsS 'http://127.0.0.1:8000/api/bars?symbol=EURUSD&timeframe=1m&source=provider&start=2026-10-06T00:00:00Z&end=2026-10-07T00:00:00Z&limit=20000' \
+            | python3 -c "import json, sys; b = json.load(sys.stdin); assert len(b['bars']) == 1440 and b['price_basis'] == 'bid', len(b['bars'])"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"symbol": "EURUSD", "strategy": "martingale", "start": "2026-10-05", "end": "2026-10-31"}' \
+            http://127.0.0.1:8000/api/backtests)" = "400"
+          # the live feed of the same process is still running
+          curl -fsS http://127.0.0.1:8000/api/status | python3 -c "
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s['connection']['state'] == 'streaming', s['connection']"
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: Logs on failure

@@ -142,6 +142,23 @@ def test_the_losing_run_and_the_sharpe_ratio() -> None:
     assert s["daily_sharpe"] == pytest.approx(expected, abs=0.01)
 
 
+def test_the_times_of_the_first_and_last_bar_of_each_trading_day() -> None:
+    stamps = np.array(
+        [
+            utc_ms(2026, 11, 11, 22, 0),  # Wednesday 17:00 New York: Thursday's trading day begins
+            utc_ms(2026, 11, 12, 3, 0),
+            utc_ms(2026, 11, 12, 21, 59),  # its last minute
+            utc_ms(2026, 11, 12, 22, 0),  # Friday's trading day
+            utc_ms(2026, 11, 13, 9, 30),
+        ]
+    )
+    assert metrics.day_spans(stamps, "America/New_York", "17:00") == {
+        "2026-11-12": (utc_ms(2026, 11, 11, 22, 0), utc_ms(2026, 11, 12, 21, 59)),
+        "2026-11-13": (utc_ms(2026, 11, 12, 22, 0), utc_ms(2026, 11, 13, 9, 30)),
+    }
+    assert metrics.day_spans(np.empty(0, dtype=np.int64), "UTC", "00:00") == {}
+
+
 def test_trade_rows_carry_what_a_chart_needs() -> None:
     t = Trade(
         direction=-1,
@@ -254,6 +271,9 @@ def test_a_report_adds_up(eurusd) -> None:  # type: ignore[no-untyped-def]
     assert report["data"]["base_bars"] == 15 * 900 and report["data"]["signal_bars"] == 15 * 180
     assert report["data"]["price_basis"] == "bid" and report["data"]["trading_days"] == 15
     assert report["data"]["holes_over_30_minutes"] == 12  # the nights between weekdays; weekends are not holes
+    # each day says when its first and its last bar began: 06:00 and 20:59 UTC in this market
+    assert all(d["first_bar_ms"] % 86_400_000 == 6 * 3_600_000 for d in daily)
+    assert all(d["last_bar_ms"] - d["first_bar_ms"] == 899 * MINUTE_MS for d in daily)
     json.dumps(report)
 
 
@@ -279,7 +299,9 @@ def test_the_same_signals_without_adding_are_always_shown_next_to_it(eurusd) -> 
     assert "without_adding" not in alone and alone["summary"]["trades_with_adds"] == 0
     assert alone["summary"]["max_units"] == 1_000_000
     assert report["without_adding"]["summary"] == alone["summary"]
-    assert report["without_adding"]["equity"] == alone["equity"]
+    # the same days, without the times of the bars (the chart takes those from the main table)
+    keys = ("day", "trades", "wins", "pnl", "pips", "cumulative", "max_units")
+    assert report["without_adding"]["daily"] == [{k: d[k] for k in keys} for d in alone["daily"]]
     assert report["summary"]["trades_with_adds"] > 0 and report["summary"]["max_units"] > 1_000_000
 
 
@@ -315,6 +337,32 @@ def test_a_report_warns_about_what_weakens_it(eurusd) -> None:  # type: ignore[n
     open_end = build_report(part, eurusd, request(split="none"))
     assert open_end["trades"][-1]["reason"] == "end_of_data"
     assert any("still open when the data ended" in w for w in open_end["warnings"])
+
+
+def test_quotes_from_the_weekend_are_not_traded(eurusd) -> None:  # type: ignore[no-untyped-def]
+    week = market(days=10)  # Monday 5 to Friday 16 October 2026, 06:00 to 21:00 UTC
+    # a provider that also publishes on Friday night after the close (17:00 New York = 21:00 UTC) and on Saturday
+    stray = np.array(
+        [utc_ms(2026, 10, 9, 21, m) for m in range(0, 30)] + [utc_ms(2026, 10, 10, 9, m) for m in range(0, 60)],
+        dtype=np.int64,
+    )
+    ts = np.concatenate((week.ts, stray))
+    order = np.argsort(ts)
+    wild = np.full(len(stray), 1.30)  # far from the market: any trade on these bars would show
+
+    def merged(values: np.ndarray) -> np.ndarray:
+        return np.concatenate((values, wild))[order]
+
+    bars = Bars(ts[order], merged(week.open), merged(week.high), merged(week.low), merged(week.close), 60)
+    with_strays = build_report(bars, eurusd, request(end="2026-10-17"))
+    clean = build_report(week, eurusd, request(end="2026-10-17"))
+    assert any("90 bars lie outside the instrument's trading week" in w for w in with_strays["warnings"])
+    assert with_strays["data"]["base_bars"] == len(week) and with_strays["data"]["trading_days"] == 10
+    assert with_strays["trades"] == clean["trades"] and with_strays["summary"] == clean["summary"]
+    assert not any("outside the instrument's trading week" in w for w in clean["warnings"])
+    only_weekend = Bars(stray, wild, wild, wild, wild, 60)
+    with pytest.raises(BacktestError, match="no bars inside the trading week"):
+        build_report(only_weekend, eurusd, request())
 
 
 def test_requests_are_checked(eurusd) -> None:  # type: ignore[no-untyped-def]
