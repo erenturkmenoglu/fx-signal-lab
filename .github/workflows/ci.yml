@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        # the same image as production, so the TimescaleDB paths of the migration and of the
+        # storage policies are exercised on every push
+        image: timescale/timescaledb:2.26.1-pg16
+        env:
+          POSTGRES_USER: fxlab
+          POSTGRES_PASSWORD: fxlab
+          POSTGRES_DB: fxlab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fxlab -d fxlab_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://fxlab:fxlab@127.0.0.1:5432/fxlab_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check fxlab tests
+      - run: ruff format --check fxlab tests migrations
+      - run: mypy
+      - run: python -m pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  image:
+    # Builds the image and runs the Compose stack the way a server does: once without an API
+    # key (nothing may be collected), once on the built-in simulator (data must flow and reach
+    # the database).  No secret is needed, and Massive is never contacted.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/server-setup.sh
+      - run: cp .env.example .env
+      - run: docker compose config --quiet
+      - name: Build and start without an API key
+        run: docker compose up -d --build
+      - name: Wait for the application
+        run: ./.github/wait-ready.sh
+      - name: Without a key nothing is collected
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/status | python3 -c "
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s['provider']['label'] == 'NOT CONFIGURED', s['provider']
+          assert s['storage']['timescaledb'] is True, s['storage']
+          assert s['storage']['policy_errors'] == [], s['storage']
+          assert s['instruments'][0]['signal_gate']['allowed'] is False
+          print('ok:', s['provider']['label'], '| timescaledb:', s['storage']['timescaledb'])"
+          curl -fsS -o /dev/null http://127.0.0.1:8000/
+          test "$(docker compose exec -T db psql -U fxlab -d fxlab -Atc 'select count(*) from obs_1s')" = "0"
+      - name: Restart on the simulator (its own database)
+        run: |
+          sed -i -e 's/^DATA_PROVIDER=.*/DATA_PROVIDER=mock/' -e 's/^FXLAB_DB=.*/FXLAB_DB=fxlab_mock/' .env
+          docker compose up -d
+          ./.github/wait-ready.sh
+      - name: Simulated quotes flow into the database, labelled as mock
+        run: |
+          sleep 15
+          curl -fsS http://127.0.0.1:8000/api/status | python3 -c "
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s['provider']['label'] == 'MOCK' and s['provider']['synthetic'] is True, s['provider']
+          assert s['connection']['state'] == 'streaming', s['connection']
+          assert s['storage']['policy_errors'] == [], s['storage']
+          print('ok:', s['provider']['label'], '|', s['connection']['state'])"
+          rows="$(docker compose exec -T db psql -U fxlab -d fxlab_mock -Atc "select count(*) from obs_1s where source = 'mock'")"
+          echo "mock observations stored: $rows"
+          test "$rows" -ge 5
+          test "$(docker compose exec -T db psql -U fxlab -d fxlab -Atc 'select count(*) from obs_1s')" = "0"
+      - name: A restart is clean
+        run: |
+          docker compose restart app
+          ./.github/wait-ready.sh
+          test "$(docker compose logs app | grep -c '"level": "error"')" = "0"
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail 120
+      - if: always()
+        run: docker compose down -v

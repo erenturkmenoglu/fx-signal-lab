@@ -1,0 +1,117 @@
+# FX Signal Lab - instrument registry
+# =============================================================================
+# This file is the single source of truth for everything that differs between
+# currency pairs.  To add a pair: add an entry, set `active: true`, restart.
+# No code changes are needed (see README "Adding a currency pair").
+#
+# Provider symbols are derived from base/quote (Massive: WS "C.EUR-USD",
+# REST aggregates "C:EURUSD", REST quotes "C:EUR-USD") and can be overridden per
+# instrument with `provider_symbols`.
+#
+# Whether a pair is really available on your Massive subscription is NOT assumed:
+# it is checked against Massive's reference API at start-up and by
+# `fxlab verify-provider`.  Unavailable pairs are marked "unsupported" and are
+# never filled with synthetic data.
+#
+# All thresholds marked PROVISIONAL are starting points chosen conservatively
+# before any live data was observed.  Calibrate them from the reject counters and
+# spread statistics on the System Health panel once real data is flowing.
+# =============================================================================
+
+defaults:
+  active: false
+
+  session:
+    calendar: fx_24x5            # fx_24x5 | always_open
+    tz: America/New_York         # all session times below are in this time zone
+    week_open:  {day: sun, time: "17:00"}
+    week_close: {day: fri, time: "17:00"}
+    daily_rollover: "17:00"      # 4h and 1d bars are anchored here
+
+  data_quality:
+    stale_after_ms: 5000         # quote older than this => observation is STALE, signals suppressed
+    max_spread_pips: 15          # PROVISIONAL - quotes wider than this are rejected (wide_spread)
+    max_jump_pct: 0.5            # PROVISIONAL - mid jump vs last accepted quote treated as suspect
+    jump_confirm_quotes: 3       # consecutive quotes that must agree before a jump is accepted
+    jump_ref_max_age_ms: 60000   # after a longer silence the old quote is no longer a reference
+    soft_future_skew_ms: 1500    # source timestamp ahead of local clock: accept but flag clock skew
+    hard_future_skew_ms: 60000   # ... beyond this: reject (future_timestamp)
+
+  costs:                         # PROVISIONAL research defaults, used from Phase 3 on
+    assumed_spread_pips: 1.0
+    slippage_pips: 0.1
+    commission_per_million: 0.0
+
+  strategy_eligibility: [all]
+
+instruments:
+  # --- initial active pair -----------------------------------------------------
+  - symbol: EURUSD
+    base: EUR
+    quote: USD
+    description: Euro / US Dollar
+    pip_size: 0.0001
+    price_precision: 5
+    active: true
+    costs: {assumed_spread_pips: 0.8}
+
+  # --- planned pairs (inactive; provider support unverified) -------------------
+  - symbol: GBPUSD
+    base: GBP
+    quote: USD
+    description: British Pound / US Dollar
+    pip_size: 0.0001
+    price_precision: 5
+    costs: {assumed_spread_pips: 1.2}
+
+  - symbol: USDJPY
+    base: USD
+    quote: JPY
+    description: US Dollar / Japanese Yen
+    pip_size: 0.01
+    price_precision: 3
+    costs: {assumed_spread_pips: 1.0}
+
+  - symbol: EURGBP
+    base: EUR
+    quote: GBP
+    description: Euro / British Pound
+    pip_size: 0.0001
+    price_precision: 5
+    costs: {assumed_spread_pips: 1.2}
+
+  - symbol: EURJPY
+    base: EUR
+    quote: JPY
+    description: Euro / Japanese Yen
+    pip_size: 0.01
+    price_precision: 3
+    costs: {assumed_spread_pips: 1.6}
+
+  # Emerging-market pairs quote less often and much wider: looser thresholds.
+  - symbol: USDZAR
+    base: USD
+    quote: ZAR
+    description: US Dollar / South African Rand
+    pip_size: 0.0001
+    price_precision: 5
+    data_quality: {stale_after_ms: 30000, max_spread_pips: 600, max_jump_pct: 2.0}
+    costs: {assumed_spread_pips: 90, slippage_pips: 10}
+
+  - symbol: USDPLN
+    base: USD
+    quote: PLN
+    description: US Dollar / Polish Zloty
+    pip_size: 0.0001
+    price_precision: 5
+    data_quality: {stale_after_ms: 30000, max_spread_pips: 300, max_jump_pct: 2.0}
+    costs: {assumed_spread_pips: 30, slippage_pips: 3}
+
+  - symbol: USDTRY
+    base: USD
+    quote: TRY
+    description: US Dollar / Turkish Lira
+    pip_size: 0.0001
+    price_precision: 5
+    data_quality: {stale_after_ms: 60000, max_spread_pips: 3000, max_jump_pct: 3.0}
+    costs: {assumed_spread_pips: 400, slippage_pips: 50}

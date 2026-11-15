@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+/* Design tokens ---------------------------------------------------------------------------
+   A chart room at night: blue-black surfaces, warm paper-white ink, amber for the things you
+   can act on.  Colour is spent only where it carries meaning - direction (teal up / red down,
+   validated for colour-vision deficiencies and always paired with a sign or shape) and state
+   (green / orange / red, always paired with a glyph and a word).                            */
+@theme {
+  --color-plane: #0a101a;
+  --color-panel: #101826;
+  --color-raise: #172235;
+  --color-line: #223048;
+  --color-line-2: #34455f;
+  --color-ink: #e9e6dc;
+  --color-ink-2: #a8b3c4;
+  --color-ink-3: #7d8aa0;
+  --color-amber: #f0b429;
+  --color-up: #14a89c;
+  --color-down: #e66767;
+  --color-ok: #0ca30c;
+  --color-warn: #ec835a;
+  --color-bad: #d03b3b;
+  --font-sans: "IBM Plex Sans Condensed", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-plane);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 1px;
+}
+
+/* figures: one width per digit so columns line up */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "zero" 1;
+}
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  min-width: 0;
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-amber);
+}
+
+.note {
+  color: var(--color-ink-3);
+  font-size: 12px;
+}
+
+/* definition rows used by the health panel */
+.rows {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) 1fr;
+  gap: 3px 14px;
+  padding: 9px 12px;
+  margin: 0;
+}
+.rows dt {
+  color: var(--color-ink-3);
+}
+.rows dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rows + .rows {
+  border-top: 1px solid var(--color-line);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.data th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--color-ink-3);
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--color-line);
+  white-space: nowrap;
+}
+table.data td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--color-line);
+  white-space: nowrap;
+}
+table.data tr:last-child td {
+  border-bottom: 0;
+}
+table.data .r {
+  text-align: right;
+}
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-ink);
+  background: var(--color-raise);
+  border: 1px solid var(--color-line-2);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--color-amber);
+}
+.btn:disabled {
+  color: var(--color-ink-3);
+  cursor: not-allowed;
+}
+.btn[aria-pressed="true"],
+.btn-primary {
+  background: var(--color-amber);
+  border-color: var(--color-amber);
+  color: #17120a;
+  font-weight: 600;
+}
+
+.field {
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-ink);
+  background: var(--color-plane);
+  border: 1px solid var(--color-line-2);
+  padding: 3px 8px;
+  min-width: 0;
+}
+
+/* hazard edge of the mock banner: synthetic data must be impossible to overlook */
+.hazard {
+  background: repeating-linear-gradient(-45deg, var(--color-amber) 0 10px, #1c1606 10px 20px);
+}
+
+.tape-cell:hover .tape-hit {
+  fill: rgb(255 255 255 / 0.07);
+}
