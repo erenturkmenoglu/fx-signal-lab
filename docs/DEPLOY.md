@@ -46,7 +46,8 @@ may compress better or worse.
 | Database, while it compresses a day of ticks | 180 to 280 MB more, for a few seconds |
 | Application, while it recovers a gap | about 40 MB more per page of 50,000 quotes |
 | Docker itself | 170 to 185 MB |
-| Image build next to the running stack | about 375 MB at its peak (up to about 620 MB for the very first build, which also downloads the images) |
+| Image build next to the running stack | about 375 MB at its peak (up to about 670 MB for the very first build, which also downloads the images) |
+| A backtest (a year of one-minute bars) | about 165 MB for 2 to 3 seconds, in a process of its own |
 | CPU, application and database together | 1.3% of one core at 5 quotes a second, 2.0% at 20, 3.0% at 50 |
 | Disk per pair and trading day | ticks: 108 bytes a quote (45 MB at 5 a second, 178 MB at 20), about a sixth of that once compressed after 7 days. 1-second grid: 13 MB, then 2.9 MB. Bars: 4.8 MB, then 1.1 MB |
 
