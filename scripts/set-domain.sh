@@ -326,9 +326,21 @@ fi
 check_password
 check_dns
 check_ports
-if [ "$mode" = "check" ] && [ "$current" = "$name" ] && caddy_running; then
-  # the domain is on: does it open?
-  if ! https_answers; then
+if [ "$mode" = "check" ] && [ "$current" = "$name" ] && ! caddy_running; then
+  $DOCKER compose --profile domain ps -a caddy 2>/dev/null || true
+  fail "$name is set in .env, but Caddy is not running, so nothing answers on ports 80 and 443. 'docker compose up -d' starts it; 'docker compose logs --tail 30 caddy' says why it stopped."
+fi
+if [ "$mode" = "check" ] && [ "$current" = "$name" ]; then
+  # the domain is on: does it open?  (a few tries: Caddy may have started a moment ago)
+  answered=0
+  for _ in 1 2 3 4 5; do
+    if https_answers; then
+      answered=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$answered" -ne 1 ]; then
     note "What Caddy reported:"
     caddy_errors | sed 's/^/    /'
     fail "$name is set and Caddy runs, but https://$name does not answer on this server with a valid certificate. Caddy keeps trying by itself; the lines above say what stops it."

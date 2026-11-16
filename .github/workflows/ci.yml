@@ -459,6 +459,12 @@ jobs:
           grep -q 'The domain was left on' domain.txt
           grep -q '^DASHBOARD_DOMAIN=fxlab.localhost$' .env
           test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/api/health/ready)" = "200"
+          # a domain that is set while Caddy is down is not called ready
+          docker compose stop caddy
+          if ./scripts/set-domain.sh --check > domain.txt 2>&1; then echo "a stopped Caddy went unnoticed"; exit 1; fi
+          grep -q 'but Caddy is not running' domain.txt
+          docker compose up -d
+          ./scripts/set-domain.sh --check
           # running it again changes nothing; Caddy stays inside its memory limit and was not restarted
           ./scripts/set-domain.sh fxlab.localhost
           ./.github/report-stack.sh check
