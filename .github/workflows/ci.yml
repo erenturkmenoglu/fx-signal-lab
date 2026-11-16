@@ -447,6 +447,18 @@ jobs:
           if ./scripts/set-password.sh --remove > domain.txt 2>&1; then echo "the login was removed from a public address"; exit 1; fi
           grep -q 'Turn the domain off first' domain.txt
           test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/api/status)" = "401"
+          # The page is also asked for through the public address, where the provider's firewall
+          # sits: a certificate can be had through port 80 while port 443 is still closed.
+          FXLAB_PUBLIC_IP=127.0.0.1 ./scripts/set-domain.sh --check > domain.txt
+          grep -q 'also answers through the public address 127.0.0.1' domain.txt
+          if grep -q 'Port 80 is not open' domain.txt; then echo "the redirect on port 80 was not seen"; exit 1; fi
+          # 203.0.113.9 answers nobody: that is what a closed port 443 looks like from here
+          if FXLAB_PUBLIC_IP=203.0.113.9 ./scripts/set-domain.sh --check > domain.txt 2>&1; then echo "a closed port 443 went unnoticed"; exit 1; fi
+          grep -q 'NOT through the' domain.txt && grep -q 'does not open from outside yet' domain.txt
+          if FXLAB_PUBLIC_IP=203.0.113.9 ./scripts/set-domain.sh fxlab.localhost > domain.txt 2>&1; then echo "a closed port 443 went unnoticed"; exit 1; fi
+          grep -q 'The domain was left on' domain.txt
+          grep -q '^DASHBOARD_DOMAIN=fxlab.localhost$' .env
+          test "$(via -o /dev/null -w '%{http_code}' https://fxlab.localhost/api/health/ready)" = "200"
           # running it again changes nothing; Caddy stays inside its memory limit and was not restarted
           ./scripts/set-domain.sh fxlab.localhost
           ./.github/report-stack.sh check

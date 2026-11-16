@@ -240,12 +240,36 @@ application. Caddy then holds ports 80 and 443 of the server; the application st
 | `make domain`: "points at ..., but this server's public address is ..." | The record points elsewhere, or the server got a new address after a stop and start. | Point the record at the address named; attach a static IP so that it stays. |
 | `make domain`: "did not answer within 240 seconds", with "Timeout during connect (likely firewall problem)" | Let's Encrypt cannot reach the server. | Open ports 80 and 443 (TCP) in the provider's firewall, then run the command again. |
 | `make domain`: "Caddy could not be started", with "address already in use" above it | Another program holds port 80 or 443. | `sudo ss -ltnp` shows which. If it is Tailscale Funnel or Serve: `sudo tailscale funnel reset`, then run the command again. |
+| `make domain`: "does not open from outside yet" | Caddy has the certificate (it came through port 80), but port 443 is closed in the provider's firewall. The command's own check runs on the server and does not pass that firewall; this second one does. | Open HTTPS (TCP 443) there, then `make domain ARGS=--check`. |
 | A certificate warning in the browser | Caddy has no certificate for the name, or the name in the browser is not the one that is set. | `docker compose logs --tail 50 caddy`. Caddy keeps trying by itself, with growing pauses. |
 | The login says "this dashboard has a public address (DASHBOARD_DOMAIN) but no password" | A domain is in `.env` and the password line is gone. Nothing is served. | `make password`. |
 | The page does not load at all after a server restart | The server has a new address (no static IP), or Caddy is not running. | `make domain`, `docker compose ps`. |
 
 Failed logins are written to the application's log as `login_failed`, with the address
 Caddy saw (`forwarded_for`).
+
+### The dashboard does not open
+
+What the browser says narrows it down:
+
+| The browser says | Most likely |
+|---|---|
+| 502 or Bad Gateway, on the Tailscale address | The application is not running or does not answer. The network is fine. |
+| Server not found | No DNS record for the name, or `www.` in front of it (only the bare name is served). On the Tailscale address: Funnel was turned off. |
+| Timed out | Port 443 is closed in the provider's firewall, or the server does not answer at all. |
+| A certificate warning | Caddy has no certificate for the name. |
+
+On the server, in this order. None of it prints a secret:
+
+```bash
+cd ~/fx-signal-lab && git log --oneline -1                    # the version
+docker compose ps -a                                          # what runs, restarts or is unhealthy
+curl -s -m 5 http://127.0.0.1:8000/api/health/ready; echo     # the application's own answer, with its reasons
+sudo make domain ARGS=--check                                 # with a domain: does it open, here and from outside
+tailscale funnel status                                       # with Tailscale: is Funnel on
+free -m; df -h /                                              # memory and disk
+docker compose logs --tail 40 app                             # the last things the application said
+```
 
 ## Changing behaviour safely
 

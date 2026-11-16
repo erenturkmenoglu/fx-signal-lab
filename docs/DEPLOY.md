@@ -268,6 +268,11 @@ without one.
    four minutes it prints what Caddy reported and puts everything back as it was. Run it
    again when the reason is fixed.
 
+   Last, it asks for the page through the server's public address, the way a browser
+   comes in. A certificate can be had through port 80 alone, and then the page still does
+   not open from outside: the command says so and leaves the domain on. Open port 443
+   and run it again.
+
    For the check of the name the command asks two public services: which address the
    server has (checkip.amazonaws.com, or icanhazip.com if that does not answer) and which
    address the name has (dns.google). `--no-dns-check` in front of the name skips both.
@@ -281,8 +286,12 @@ Good to know:
   internet read that list. They reach the login page and the health check, nothing
   else; the password is what stands between them and the dashboard
   ([RISKS.md](RISKS.md), R6).
-* `sudo make domain` shows what is set. `sudo make domain ARGS=--remove` stops Caddy,
-  which closes the two ports on the server. For another name, run the command with it.
+* `sudo make domain` shows what is set, and `sudo make domain ARGS=--check` asks whether
+  it opens: on the server, and through its public address. `sudo make domain
+  ARGS=--remove` stops Caddy, which closes the two ports on the server. For another
+  name, run the command with it.
+* Only the name itself is served. `www.` in front of it is another name, with no DNS
+  record and no certificate.
 * While a domain is set, `make password ARGS=--remove` refuses. An application that
   finds a domain in `.env` and no password serves nothing and says why.
 * The certificate lives in the Docker volume `caddy_data`. Renewal needs nothing from
@@ -294,10 +303,13 @@ Good to know:
 
 Tested: the real Caddy in front of the real application on such a trial name, by hand
 with a browser and in CI (the redirect, the certificate, the login and its cookie, the
-live stream, compression, the refusals, turning it off). Not tested: a certificate from
+live stream, compression, the refusals, the question from outside against an address
+that answers and one that does not, turning it off). Not tested: a certificate from
 Let's Encrypt for a real name, the Lightsail console steps (they are from its
-documentation), and Funnel and Caddy running side by side. Should Caddy not start
-because port 443 is taken, turn Funnel off first.
+documentation), Funnel and Caddy running side by side, and the question from outside
+on Lightsail itself: it relies on a server reaching its own public address through the
+provider's firewall, which is how AWS networks are described to behave. Should Caddy
+not start because port 443 is taken, turn Funnel off first.
 
 ### 5.5 A work computer
 
