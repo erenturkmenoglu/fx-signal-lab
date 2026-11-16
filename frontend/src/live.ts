@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import type { SignalMessage } from "./signals/model";
 import type { ConnEvent, Obs, ObsMessage, SystemStatus } from "./types";
 
 const BUFFER = 600; // seconds of observations kept per instrument in the browser
@@ -14,6 +15,8 @@ export interface Live {
   observations: (symbol: string) => Obs[];
   /** Subscribe to per-second messages (used by the chart for incremental updates). */
   subscribe: (listener: (message: ObsMessage) => void) => () => void;
+  /** Subscribe to the orders the live rule signals, each at the second it is raised. */
+  subscribeSignals: (listener: (message: SignalMessage) => void) => () => void;
   /** Incremented whenever the buffers were replaced (connect, resync after a backfill). */
   generation: number;
 }
@@ -23,6 +26,7 @@ type Incoming =
   | { type: "status"; status: SystemStatus }
   | { type: "event"; event: ConnEvent }
   | { type: "error"; error: string }
+  | SignalMessage
   | ObsMessage;
 
 export function useLive(): Live {
@@ -33,6 +37,7 @@ export function useLive(): Live {
   const [, setTick] = useState(0);
   const buffers = useRef(new Map<string, Obs[]>());
   const listeners = useRef(new Set<(message: ObsMessage) => void>());
+  const signalListeners = useRef(new Set<(message: SignalMessage) => void>());
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -73,6 +78,8 @@ export function useLive(): Live {
           buffers.current.set(message.symbol, list);
           for (const listener of listeners.current) listener(message);
           setTick((t) => t + 1);
+        } else if (message.type === "signal") {
+          for (const listener of signalListeners.current) listener(message);
         } else if (message.type === "event") {
           setEvents((previous) => [message.event, ...previous].slice(0, 100));
         } else if (message.type === "error") {
@@ -115,5 +122,12 @@ export function useLive(): Live {
     };
   }, []);
 
-  return { status, link, events, observations, subscribe, generation };
+  const subscribeSignals = useCallback((listener: (message: SignalMessage) => void) => {
+    signalListeners.current.add(listener);
+    return () => {
+      signalListeners.current.delete(listener);
+    };
+  }, []);
+
+  return { status, link, events, observations, subscribe, subscribeSignals, generation };
 }

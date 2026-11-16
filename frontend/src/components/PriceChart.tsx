@@ -9,12 +9,11 @@ import {
   type CandlestickData,
   type IChartApi,
   type ISeriesApi,
-  type LineData,
   type UTCTimestamp,
-  type WhitespaceData,
 } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { HoleyLine, type LinePoint } from "../chartline";
 import { dateTimeUTC, int, price } from "../format";
 import type { Live } from "../live";
 import type { Bar, InstrumentStatus, Obs, ObsMessage } from "../types";
@@ -52,8 +51,8 @@ function candle(bar: Bar): CandlestickData<UTCTimestamp> {
   };
 }
 
-function point(obs: Obs): LineData<UTCTimestamp> | WhitespaceData<UTCTimestamp> {
-  // stale and missing seconds leave a hole in the line; they are never bridged
+function point(obs: Obs): LinePoint {
+  // stale and missing seconds leave a hole in the line; they are never bridged (see chartline.ts)
   const usable = (obs.status === "fresh" || obs.status === "carried") && obs.mid != null;
   return usable ? { time: toTime(obs.ts), value: obs.mid as number } : { time: toTime(obs.ts) };
 }
@@ -154,6 +153,7 @@ export function PriceChart({
       ? c.addSeries(LineSeries, { color: "#e9e6dc", lineWidth: 2, priceFormat, crosshairMarkerRadius: 4 })
       : c.addSeries(CandlestickSeries, { priceFormat, borderVisible: true });
     c.timeScale().applyOptions({ secondsVisible: timeframe.endsWith("s") });
+    const line = isLine ? new HoleyLine(series as ISeriesApi<"Line">, 1) : null;
     lookup.current = new Map();
     setLatest(null);
     setHover(null);
@@ -176,7 +176,7 @@ export function PriceChart({
       if (time < lastTime) return;
       lastTime = time;
       lookup.current.set(time, { kind: "obs", obs });
-      (series as ISeriesApi<"Line">).update(point(obs));
+      line?.push(time, point(obs).value ?? null);
       setLatest({ kind: "obs", obs });
     };
     const onMessage = (message: ObsMessage) => {
@@ -199,7 +199,7 @@ export function PriceChart({
       if (isLine) {
         const list = observations(symbol);
         for (const obs of list) lookup.current.set(toTime(obs.ts), { kind: "obs", obs });
-        (series as ISeriesApi<"Line">).setData(list.map(point));
+        line?.set(list.map(point));
         const tail = list[list.length - 1];
         if (tail) {
           lastTime = toTime(tail.ts);

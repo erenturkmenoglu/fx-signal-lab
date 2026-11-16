@@ -124,16 +124,23 @@ def _wilder(values: Array, n: int, first: int) -> Array:
     return out
 
 
-def rsi(values: npt.ArrayLike, n: int = 14) -> Array:
-    """Wilder's Relative Strength Index, 0 to 100.  Defined from position ``n``."""
+def rsi_averages(values: npt.ArrayLike, n: int = 14) -> tuple[Array, Array]:
+    """Wilder's average gain and average loss, the two numbers an RSI is made of.
+
+    Defined from position ``n``.  They are all the RSI remembers: with them and the newest
+    value the next RSI follows without the history, which is how a live feed continues one.
+    """
     _check_period(n)
     x = _as_array(values)
-    out = np.full(x.shape, np.nan)
     if len(x) <= n:
-        return out
+        return np.full(x.shape, np.nan), np.full(x.shape, np.nan)
     change = np.diff(x, prepend=x[0])
-    gain = _wilder(np.where(change > 0, change, 0.0), n, 1)
-    loss = _wilder(np.where(change < 0, -change, 0.0), n, 1)
+    return _wilder(np.where(change > 0, change, 0.0), n, 1), _wilder(np.where(change < 0, -change, 0.0), n, 1)
+
+
+def rsi(values: npt.ArrayLike, n: int = 14) -> Array:
+    """Wilder's Relative Strength Index, 0 to 100.  Defined from position ``n``."""
+    gain, loss = rsi_averages(values, n)
     with np.errstate(divide="ignore", invalid="ignore"):
         out = 100.0 - 100.0 / (1.0 + gain / loss)
     out[(loss == 0) & (gain > 0)] = 100.0

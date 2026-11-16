@@ -2,6 +2,7 @@ import { notifyUnauthorized } from "./auth";
 import type { BoardBody, BoardResult, BoardState, WindowBody, WindowResult } from "./board/model";
 import type { BacktestBody, LabInfo, Report } from "./lab/model";
 import type { Definition, Saved, SetupBody, SetupReport } from "./setups/model";
+import type { Channels, LiveForm, LiveSettings, LiveView } from "./signals/model";
 import type { Bar, ConnEvent, Gap, Job, Obs, SystemStatus } from "./types";
 
 export class ApiError extends Error {
@@ -76,4 +77,15 @@ export const api = {
     request<Saved>(`/api/setups?${query({ symbol })}`, { ...post(definition), method: "PUT" }),
   deleteSetup: (id: number) => request<void>(`/api/setups/${id}`, { method: "DELETE" }),
   runSetup: (body: SetupBody) => request<SetupReport>("/api/setups/run", post(body)),
+  /**
+   * The live page's picture: the signals of the trading day and the channels, with either the day's seconds
+   * or (`minutes`) the one-minute closes the channels were fitted to.
+   */
+  liveView: (symbol: string, minutes: boolean) =>
+    request<LiveView>(`/api/live/view?${query(minutes ? { symbol, history: "true", seconds: "false" } : { symbol })}`),
+  liveChannels: (symbol: string) => request<Channels>(`/api/live/channels?${query({ symbol })}`),
+  liveSettings: () => request<LiveForm>("/api/live/settings"),
+  /** Keep new settings of the live rule; what is left out stays as it is. */
+  saveLiveSettings: (changes: Partial<LiveSettings>) =>
+    request<LiveForm>("/api/live/settings", { ...post(changes), method: "PUT" }),
 };

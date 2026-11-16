@@ -11,16 +11,17 @@ import { SecondsTape } from "./components/SecondsTape";
 import { Board } from "./board/Board";
 import { Lab } from "./lab/Lab";
 import { Setups } from "./setups/Setups";
+import { Signals } from "./signals/Signals";
 import { useLive } from "./live";
 import type { Job } from "./types";
 
-const PAGES: Record<string, View> = { "#lab": "lab", "#board": "board", "#setups": "setups" };
+const PAGES: Record<string, View> = { "#signals": "signals", "#lab": "lab", "#board": "board", "#setups": "setups" };
 const viewFromAddress = (): View => PAGES[window.location.hash] ?? "live";
 
 export function App({ onSignOut }: { onSignOut?: () => void }) {
   const live = useLive();
   const { status, link } = live;
-  // which page is shown lives in the address (#lab, #board, #setups), so a reload or a bookmark comes back to it
+  // which page is shown lives in the address (#signals, #lab, #board, #setups), so a reload or a bookmark comes back to it
   const [view, setView] = useState<View>(viewFromAddress);
   useEffect(() => {
     const follow = () => setView(viewFromAddress());
@@ -32,9 +33,9 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
     setView(next);
     window.scrollTo({ top: 0 });
   };
-  // the lab, the board and the setups are kept once they have been opened: a result is still there after a look
-  // at another page
-  const [opened, setOpened] = useState({ lab: false, board: false, setups: false });
+  // the live signals, the lab, the board and the setups are kept once they have been opened: the chart and a
+  // result are still there after a look at another page
+  const [opened, setOpened] = useState({ signals: false, lab: false, board: false, setups: false });
   useEffect(() => {
     if (view !== "live") setOpened((before) => (before[view] ? before : { ...before, [view]: true }));
   }, [view]);
@@ -74,6 +75,18 @@ export function App({ onSignOut }: { onSignOut?: () => void }) {
         </Notice>
       ) : (
         <>
+          {opened.signals || view === "signals" ? (
+            <div hidden={view !== "signals"}>
+              {inst ? (
+                <Signals inst={inst} live={live} synthetic={status.provider.synthetic} />
+              ) : (
+                <Notice title="No active instruments">
+                  Set <code className="num">active: true</code> for at least one pair in{" "}
+                  <code className="num">config/instruments.yaml</code> and restart.
+                </Notice>
+              )}
+            </div>
+          ) : null}
           {opened.lab || view === "lab" ? (
             <div hidden={view !== "lab"}>
               <Lab symbol={inst?.symbol ?? null} />

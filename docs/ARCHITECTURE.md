@@ -52,7 +52,7 @@ No Redis, no message broker, no ORM: none is justified at this scale.
 | `fxlab.marketdata` | `MarketDataAdapter` / `MarketDataSink` protocols; Massive WebSocket and REST clients; mock adapter. | domain |
 | `fxlab.pipeline` | Normaliser, sampler, bar aggregator, latency statistics, quality gate, live hub, ingestion service. | domain, marketdata, storage |
 | `fxlab.storage` | Schema, migrations, repository functions, batch writer, data-mode guard. | domain |
-| `fxlab.services` | Gap detection and recovery, historical download, provider verification. | all of the above |
+| `fxlab.services` | Gap detection and recovery, historical download, provider verification, backtests on stored history, live signals. | all of the above |
 | `fxlab.api` | FastAPI app: REST, live WebSocket, static dashboard. | pipeline, services |
 | `fxlab.cli` | `serve`, `migrate`, `verify-provider`, `history`, `gaps`, `instruments`. | everything |
 | `frontend/` | React dashboard. Talks only to `/api` and `/ws/live`. | the API |
@@ -234,7 +234,7 @@ quotes, and the ticks recovered for it continue after the last one captured live
 |---|---|
 | 2 Indicators | consume `Bar` and `Observation` streams; one module per indicator; parameters in the database, editable from the dashboard |
 | 3 Backtesting | an event loop that feeds stored observations and bars through the same strategy objects; Parquet export of the grid |
-| 4 Live signals | subscribe to bar-close events from the aggregator; must call `evaluate_signal_gate` |
+| 4 Live signals | begun ([LIVE.md](LIVE.md)): the ingestion service hands every closed second to `services.live_signals` together with the answer of `evaluate_signal_gate`; the rule itself is pure (`research.live`), in two forms that tests hold to the same answer; signals go out on `/ws/live`. Still to come: signals from a tested strategy on bar-close events |
 | 5 Strategy intelligence | regime classifier and walk-forward runner on top of 2 and 3 |
 | 6 Paper trading | fills simulated against `quote_ticks` bid/ask |
 | 7 More pairs | YAML entries, verified with `fxlab verify-provider` |

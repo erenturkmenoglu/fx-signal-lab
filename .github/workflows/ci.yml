@@ -378,6 +378,18 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:8000/api/setups/1)" = "204"
           test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:8000/api/setups/1)" = "404"
           test "$(curl -fsS http://127.0.0.1:8000/api/setups)" = "[]"
+      - name: The live signals follow the simulator, with settings of one's own and signals on the stream
+        run: |
+          # inside the container, which has the WebSocket library; the prices are the simulator's
+          docker compose exec -T app python - < .github/live-signals.py
+          # the page itself is in the image, and the dashboard's code travels compressed
+          curl -fsS --compressed -D headers.txt -o index.html http://127.0.0.1:8000/
+          script="$(grep -o 'assets/index-[^"]*\.js' index.html | head -1)"
+          test -n "$script"
+          curl -fsS -H 'Accept-Encoding: gzip' -D headers.txt -o script.gz "http://127.0.0.1:8000/$script"
+          grep -qi '^content-encoding: gzip' headers.txt
+          gunzip -c script.gz | grep -q 'Orders signalled this trading day'
+          echo "ok: the dashboard's code is $(stat -c %s script.gz) bytes on the wire"
       - name: Nothing ran out of memory inside the limits
         run: ./.github/report-stack.sh check
       - name: A domain of its own needs a password, is served over HTTPS by Caddy and can be turned off again

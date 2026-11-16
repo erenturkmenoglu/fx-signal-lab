@@ -40,9 +40,17 @@ thin slice through Phases 2 to 4, and the rest afterwards.
      and a trend channel, instead of single signals. A fourth page runs a rule of one's own
      (chosen methods, any or all, a stop and a target), saves it on the server, and asks of
      the trades that failed what was going on around them.
-4. **Live signals** from the strategy that survives, running the same code as the
-   backtest. The signal board is where they will be shown; a saved setup is the natural
-   thing to watch live.
+4. **Live signals** (begun on 16 November 2026, in a simpler form than planned, at the
+   owner's request; [LIVE.md](LIVE.md)). A page of its own watches one rule, RSI and
+   Bollinger bands, on one-second bars of the live bid, marks every second at which it
+   turns true and lists it; three trend channels are drawn from ten days of history. No
+   stop, no target, no profit: only where a buy or a sell was signalled. The rule is one
+   piece of code in two forms (a stretch at once, a second at a time) that tests hold to
+   the same answer. It has run on simulated prices only.
+   Still open from the original plan: live signals from a strategy that has survived
+   testing, with the code of the backtest. A saved setup is the natural thing to watch;
+   what the rule of the page would have earned is not known, because nothing here tests
+   it yet.
 
 Deferred until that works end to end: the wide indicator library, regime detection,
 the ensemble and multi-timeframe strategies, notifications, the paper-trading journal,

@@ -15,7 +15,10 @@ seventeen signal methods, a **strategy lab** page for testing one of them in dep
 **signal board** page that runs all of them on every bar length at once, and a **setups**
 page for rules of one's own that also says what the market was doing around the trades
 that failed ([docs/BACKTEST.md](docs/BACKTEST.md)); they have been tested on hand-written
-and random prices, not yet on real history. No strategy here is known to be profitable.
+and random prices, not yet on real history. A **live signals** page marks, second by
+second, where a rule of RSI and Bollinger bands turns true on the live prices
+([docs/LIVE.md](docs/LIVE.md)); it has run on simulated prices only. No strategy here is
+known to be profitable.
 
 ## What Phase 1 does
 
@@ -97,12 +100,18 @@ and uses its own database. The application refuses to mix mock and market data.
 | Data gaps | detected gaps and whether they were recovered |
 | Historical data | download provider bars for a range and view them on the chart |
 
-A second page, **Strategy lab**, runs a strategy on the stored provider history: the form
+A second page, **Live signals**, is the simple one: a chart of today, one bid a second,
+with three trend channels (short, medium, long) and a triangle at every second where the
+rule "RSI and Bollinger bands" turned true, green for a buy and red for a sell, listed in
+a table below. The settings start at the textbook defaults and can be changed. It sends
+no orders and works out no profit. See [docs/LIVE.md](docs/LIVE.md).
+
+Another page, **Strategy lab**, runs a strategy on the stored provider history: the form
 with strategy parameters and trading assumptions, the totals (in-sample next to
 out-of-sample, with adding next to without), the running total by day, and the price chart
 of any day with entries, clips, targets and stops marked on it.
 
-A third page, **Signal board**, is the short way: choose a period, press one button, and
+The **Signal board** is the short way: choose a period, press one button, and
 every method runs on bars of every length in the background. It shows, per method and per
 trading day, how many trades worked and how many failed, which method did best each day,
 what the momentum methods and the mean-reversion methods made each day, and a chart of a
@@ -110,7 +119,7 @@ day, a week or a month with the trend channel on the prices and, under them, wha
 momentum methods said together (with every change of momentum marked) and how many
 mean-reversion signals came.
 
-A fourth page, **My setups**, runs a rule of one's own: chosen methods, "any of them" or
+**My setups** runs a rule of one's own: chosen methods, "any of them" or
 "all of them agree", a stop and a target. It lists every trade, the result of each day and
 of the period, and asks of the trades that failed what was going on around them: against
 the momentum, outside the trend channel, and whether that is more than chance. Setups are
@@ -198,8 +207,8 @@ backend/fxlab/domain        records, instrument registry, calendars, timeframes
 backend/fxlab/marketdata    adapter interfaces, Massive WebSocket + REST, mock adapter
 backend/fxlab/pipeline      normaliser, 1-second sampler, bars, latency, ingestion service
 backend/fxlab/storage       schema, repository, batch writer, data-mode guard
-backend/fxlab/services      gap recovery, history download, provider verification, backtests on stored history
-backend/fxlab/research      indicators, strategies, the backtest engine, results (no I/O)
+backend/fxlab/services      gap recovery, history download, provider verification, backtests on stored history, live signals
+backend/fxlab/research      indicators, strategies, the backtest engine, results, the live rule (no I/O)
 backend/fxlab/api           FastAPI app (REST, live stream, dashboard files)
 backend/migrations          Alembic migrations
 backend/tests               unit and integration tests, fake Massive server
@@ -215,6 +224,7 @@ docs/                       architecture, API notes, deployment, roadmap, risks,
 * [MASSIVE_API_NOTES.md](docs/MASSIVE_API_NOTES.md): verified API facts with sources
 * [DEPLOY.md](docs/DEPLOY.md): an always-on server and the dashboard on your phone
 * [BACKTEST.md](docs/BACKTEST.md): how a backtest trades, its assumptions, how to read a result
+* [LIVE.md](docs/LIVE.md): the live signals page, its rule, its channels, how often it signals
 * [RUNBOOK.md](docs/RUNBOOK.md): operating and recovering the system
 * [RISKS.md](docs/RISKS.md): technical risks and open questions
 * [ROADMAP.md](docs/ROADMAP.md): Phases 2 to 8

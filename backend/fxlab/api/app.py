@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from fxlab import __version__
@@ -23,6 +24,7 @@ from fxlab.api.auth import Auth, require_session
 from fxlab.api.auth import router as auth_router
 from fxlab.api.lab import router as lab_router
 from fxlab.api.lab import stop_runs
+from fxlab.api.live import router as live_router
 from fxlab.api.routes import router
 from fxlab.config import Settings, get_settings
 from fxlab.domain.instruments import InstrumentRegistry
@@ -98,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router, prefix="/api")
     app.include_router(router, prefix="/api", dependencies=[Depends(require_session)])
     app.include_router(lab_router, prefix="/api", dependencies=[Depends(require_session)])
+    app.include_router(live_router, prefix="/api", dependencies=[Depends(require_session)])
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Response:
@@ -111,6 +114,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if auth.enabled:  # browsers ignore this over plain http, so it is harmless on a local port
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         return response
+
+    # The dashboard's code and the long answers (a trading day is 86 400 prices) travel compressed; it matters
+    # most on a phone.  Added last, so it wraps everything above.  The live stream is not touched by it.
+    app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=6)
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket) -> None:

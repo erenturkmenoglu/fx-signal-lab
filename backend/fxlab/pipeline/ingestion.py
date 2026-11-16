@@ -47,10 +47,11 @@ from fxlab.pipeline.hub import LiveHub
 from fxlab.pipeline.latency import DurationStats, LatencyTracker, RateCounter
 from fxlab.pipeline.normalizer import QuoteNormalizer, Verdict
 from fxlab.pipeline.payloads import bar_payload, event_payload, obs_payload
-from fxlab.pipeline.quality import evaluate_signal_gate
+from fxlab.pipeline.quality import GateDecision, evaluate_signal_gate
 from fxlab.pipeline.sampler import SecondSampler
 from fxlab.services.gaps import GapService, GapTask
 from fxlab.services.history import HistoryService
+from fxlab.services.live_signals import Feed, LiveSignals
 from fxlab.storage import repo
 from fxlab.storage import schema as s
 from fxlab.storage.db import apply_storage_policies, timescale_available
@@ -104,6 +105,7 @@ class IngestionService:
         self.synthetic = settings.data_provider == "mock"
 
         self.hub = LiveHub()
+        self.signals = LiveSignals(engine, self.clock, self.hub)
         self.writer = BatchWriter(
             engine,
             self.clock,
@@ -530,6 +532,9 @@ class IngestionService:
                 continue
             rt.last_obs = obs
             rt.recent_obs.append(obs)
+            if self.signals.watching(rt.inst.symbol):
+                # the live rule sees every stored second, and whether signals are allowed right now
+                self.signals.on_observation(self.feed(rt), obs, self.signal_gate(rt).signals_allowed)
             self.writer.add_observation(repo.obs_row(rt.instrument_id, obs))
             closed_bars = rt.bars.on_observation(obs)
             for bar in closed_bars:
@@ -682,6 +687,7 @@ class IngestionService:
         rt.recent_obs.extend([*stored, *tail])
         rebuilt = await self._rebuild_bars(rt, start_ms, write=True)
         log.info("bars_rebuilt_after_backfill", symbol=symbol, bars=rebuilt)
+        self.signals.invalidate(symbol)  # its seconds were replaced: the day's signals are worked out again
         self.hub.publish({"type": "resync"})
 
     async def _refresh_gap_counts(self) -> None:
@@ -697,6 +703,29 @@ class IngestionService:
     # ===================================================================== public API ==
     def runtime(self, symbol: str) -> InstrumentRuntime | None:
         return self._rt.get(symbol)
+
+    def feed(self, rt: InstrumentRuntime) -> Feed:
+        """What the live signals need to know about an instrument."""
+        return Feed(rt.inst, rt.instrument_id, rt.calendar, rt.recent_obs)
+
+    def signal_gate(self, rt: InstrumentRuntime, now: int | None = None, *, skew: bool | None = None) -> GateDecision:
+        """Whether signals may be generated for this instrument right now, and if not, why.
+
+        The status page reports this answer and the live signals obey it: one function for both.
+        """
+        now = self.clock.now_ms() if now is None else now
+        streaming = (
+            self.adapter is not None and self.adapter.status().as_dict()["state"] == ConnectionState.STREAMING.value
+        )
+        last = rt.last_obs
+        return evaluate_signal_gate(
+            provider_configured=self.settings.provider_configured,
+            instrument_supported=rt.supported,
+            market_open=rt.calendar.is_open(now),
+            feed_streaming=streaming,
+            last_status=last.status if last is not None and now - last.ts_ms < 5 * SECOND_MS else None,
+            clock_skew_suspected=rt.latency.snapshot(now).clock_skew_suspected if skew is None else skew,
+        )
 
     def recent_observations(self, symbol: str, limit: int = 300) -> list[Observation]:
         rt = self._rt.get(symbol)
@@ -736,7 +765,6 @@ class IngestionService:
                 "state": ConnectionState.NOT_CONFIGURED.value,
                 "state_since_ms": self._started_ms,
             }
-        streaming = connection["state"] == ConnectionState.STREAMING.value
         configured = settings.provider_configured
 
         instruments: list[dict[str, Any]] = []
@@ -746,14 +774,7 @@ class IngestionService:
             quote = rt.sampler.last_quote
             last = rt.last_obs
             market_open = rt.calendar.is_open(now)
-            gate = evaluate_signal_gate(
-                provider_configured=configured,
-                instrument_supported=rt.supported,
-                market_open=market_open,
-                feed_streaming=streaming,
-                last_status=last.status if last is not None and now - last.ts_ms < 5 * SECOND_MS else None,
-                clock_skew_suspected=lat.clock_skew_suspected,
-            )
+            gate = self.signal_gate(rt, now, skew=lat.clock_skew_suspected)
             change = None
             if quote is not None and rt.ref_mid:
                 diff = quote.mid - rt.ref_mid
