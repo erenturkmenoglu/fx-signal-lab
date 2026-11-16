@@ -37,11 +37,17 @@ def settings_for(server: FakeMassiveServer, **overrides: Any) -> Settings:
 
 
 async def seed_history(server: FakeMassiveServer, registry: InstrumentRegistry) -> None:
-    """Put quotes on the fake's tape inside the window the probe will ask for."""
+    """Put quotes on the fake's tape inside the window the probe will ask for, on whole seconds.
+
+    While the market is closed that window ends at the last close, a whole second.  While it is
+    open the window ends one hour before "now", to the millisecond, and stamps counted back from
+    there would carry that fraction: the tape would read "sub-second" on weekdays and "1 second"
+    on weekends.  So the first stamp is rounded down to a second.
+    """
     _, end = recent_open_window(registry.get("EURUSD"), SystemClock().now_ms())
+    first = (end - 30 * 60_000) // 1_000 * 1_000
     quotes = [
-        {"b": 1.16 + (i % 9) * 0.00001, "a": 1.16008 + (i % 9) * 0.00001, "t": end - 30 * 60_000 + i * 2_000}
-        for i in range(900)
+        {"b": 1.16 + (i % 9) * 0.00001, "a": 1.16008 + (i % 9) * 0.00001, "t": first + i * 2_000} for i in range(900)
     ]
     await server.fake.publish(quotes)
 
